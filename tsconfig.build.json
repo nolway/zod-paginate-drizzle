@@ -1,0 +1,8 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "declaration": true,
+        "removeComments": false,
+    },
+    "exclude": ["integration", "vitest.integration.config.ts", "**/*.test.ts", "**/*.test.*.ts", "dist"],
+}
