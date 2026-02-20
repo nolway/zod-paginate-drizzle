@@ -1,0 +1,78 @@
+{
+  "name": "zod-paginate-drizzle",
+  "version": "1.0.0",
+  "description": "Drizzle adapter for zod-paginate.",
+  "keywords": [
+    "zod",
+    "paginate",
+    "pagination",
+    "cursor",
+    "page",
+    "drizzle",
+    "adapter",
+    "mysql",
+    "postgresql"
+  ],
+  "homepage": "https://github.com/nolway/zod-paginate-drizzle#readme",
+  "bugs": {
+    "url": "https://github.com/nolway/zod-paginate-drizzle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nolway/zod-paginate-drizzle.git"
+  },
+  "license": "GPL-3.0",
+  "author": "Nolway",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "rm -rf ./dist && npx tsc -p tsconfig.build.json",
+    "test": "vitest --run --coverage",
+    "test:integration": "vitest --run --config vitest.integration.config.ts",
+    "test:integration:pg": "vitest --run --config vitest.integration.config.ts integration/pg",
+    "test:integration:mysql": "vitest --run --config vitest.integration.config.ts integration/mysql",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "lint": "eslint \"src/**/*.{ts,json}\"",
+    "lint:fix": "eslint \"src/**/*.{ts,json}\" --fix",
+    "prepare": "husky",
+    "precommit": "lint-staged",
+    "typecheck": "tsc --skipLibCheck --project tsconfig.json --noEmit --pretty false"
+  },
+  "types": "dist/main.d.ts",
+  "files": [
+    "dist/**/*"
+  ],
+  "peerDependencies": {
+    "zod": "^4.3.6"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.1",
+    "zod": "^4.3.6",
+    "zod-paginate": "^1.1.0"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
+    "@eslint/eslintrc": "^3.3.3",
+    "@eslint/js": "^9.0.0",
+    "@stylistic/eslint-plugin": "^5.8.0",
+    "@total-typescript/ts-reset": "^0.6.1",
+    "@types/pg": "^8.16.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-check-file": "^3.3.1",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-no-only-tests": "^3.3.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "mysql2": "^3.17.4",
+    "pg": "^8.18.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^4.0.18"
+  }
+}
