@@ -15,7 +15,7 @@ import {
   not as drizzleNot,
   or as drizzleOr,
 } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
+import type { Column, GetColumnData, SQL } from 'drizzle-orm';
 import type {
   AllowedPath,
   DataSchema,
@@ -26,6 +26,17 @@ import type {
 } from 'zod-paginate';
 
 export type DrizzleSelectShape<TColumn> = Record<string, TColumn>;
+
+/**
+ * Infers query-mode data types from a Drizzle fields map.
+ * Handles nullable columns correctly via `GetColumnData` (adds `| null` when
+ * the column is not marked as `notNull`).
+ *
+ * Result is a `Partial` because pagination may select only a subset of fields.
+ */
+export type InferFieldsData<TFields extends Record<string, unknown>> = Partial<{
+  [K in keyof TFields]: TFields[K] extends Column ? GetColumnData<TFields[K]> : unknown;
+}>;
 
 export interface DrizzleOperatorSet<TColumn, TWhereExpr, TOrderByExpr> {
   eq: (column: TColumn, value: unknown) => TWhereExpr;
@@ -74,15 +85,19 @@ export type DrizzleSqlOperatorSet = DrizzleOperatorSet<DrizzleSqlColumn, SQL, SQ
 
 export type DrizzleDialect = 'pg' | 'mysql';
 
-export interface DrizzleDynamicQuery extends PromiseLike<Record<string, unknown>[]> {
-  where(expression: SQL): this;
-  orderBy(...expressions: SQL[]): this;
-  limit(value: number): this;
-  offset(value: number): this;
+export interface DrizzleDynamicQuery<
+  TResult = Record<string, unknown>[],
+> extends PromiseLike<TResult> {
+  where(expression: SQL): DrizzleDynamicQuery<TResult>;
+  orderBy(...expressions: SQL[]): DrizzleDynamicQuery<TResult>;
+  limit(value: number): DrizzleDynamicQuery<TResult>;
+  offset(value: number): DrizzleDynamicQuery<TResult>;
 }
 
-export interface DrizzleAutoQuery extends PromiseLike<Record<string, unknown>[]> {
-  $dynamic(): DrizzleDynamicQuery;
+export interface DrizzleAutoQuery<
+  TResult = Record<string, unknown>[],
+> extends PromiseLike<TResult> {
+  $dynamic(): DrizzleDynamicQuery<TResult>;
 }
 
 export interface ApplyDrizzlePaginationOnQueryConfig<
@@ -381,11 +396,7 @@ function buildDrizzleClausesFromPagination<
   const limit = pagination.limit;
 
   let offset: number | undefined;
-  if (
-    pagination.type === 'LIMIT_OFFSET' &&
-    typeof pagination.page === 'number' &&
-    limit !== undefined
-  ) {
+  if (pagination.type === 'LIMIT_OFFSET' && typeof pagination.page === 'number') {
     const safePage = pagination.page > 0 ? pagination.page : 1;
     offset = (safePage - 1) * limit;
   }
@@ -413,11 +424,21 @@ function getOperatorsForDialect(dialect: DrizzleDialect): DrizzleSqlOperatorSet 
 export function applyDrizzlePaginationOnQuery<
   TSchema extends DataSchema,
   TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
 >(
   parsed: PaginationQueryParams<TSchema>,
-  config: ApplyDrizzlePaginationOnQueryConfig<TSchema, TColumn>,
+  config: {
+    dialect: DrizzleDialect;
+    buildQuery: (
+      selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
+    ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    strictFieldMapping?: boolean;
+    selectAlias?: (fieldPath: string) => string;
+    operators?: DrizzleSqlOperatorSet;
+  },
 ): {
-  query: DrizzleDynamicQuery;
+  query: DrizzleDynamicQuery<InferFieldsData<TFields>[]>;
   clauses: DrizzlePaginationClauses<TColumn, SQL, SQL>;
 } {
   const operators = config.operators ?? getOperatorsForDialect(config.dialect);
