@@ -1,1 +1,1 @@
-export * from './drizzle-adapter';
+export * from './s3-adapter';

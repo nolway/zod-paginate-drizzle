@@ -26,7 +26,7 @@ If you can share a minimal repro repository or snippet, link it here:
 Paste the smallest config that still reproduces the issue:
 
 ```ts
-// applyDrizzlePaginationOnQuery({ ... })
+// paginateS3Objects({ ... })
 ```
 
 Input example (querystring or object):
@@ -46,7 +46,7 @@ Input example (querystring or object):
 - OS:
 - Node version:
 - Package manager:
-- zod-paginate-drizzle version:
+- zod-paginate-aws-s3 version:
 - zod-paginate version:
 - zod version:
 

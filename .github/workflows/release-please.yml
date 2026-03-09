@@ -18,7 +18,7 @@ jobs:
         id: release
         with:
           release-type: node
-          package-name: "zod-paginate-drizzle"
+          package-name: "zod-paginate-aws-s3"
       # The logic below handles the npm publication:
       - uses:
           actions/checkout@v2
