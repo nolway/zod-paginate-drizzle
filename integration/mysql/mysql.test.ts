@@ -1,7 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { DataSchema, PaginationQueryParams } from 'zod-paginate';
-import { applyDrizzlePaginationOnQuery } from '../../src/drizzle-adapter';
+import {
+  applyDrizzlePaginationOnQuery,
+  defineRelation,
+  generatePaginationQuery,
+} from '../../src/drizzle-adapter';
 import { users, posts } from './schemas';
 import { db, seedUsers, setupMysql } from './setup';
 
@@ -538,5 +542,93 @@ describe('MySQL integration', () => {
       expect(Object.keys(firstRow)).toContain('email');
       expect(Object.keys(firstRow)).toContain('id');
     }
+  });
+
+  it('execute() returns data with relations and correct pagination metadata', async () => {
+    await seedUsers();
+
+    await db.execute(sql`
+      INSERT INTO posts (title, author_id) VALUES
+        ('Post A1', 1), ('Post A2', 1), ('Post B1', 2)
+    `);
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 3,
+      select: ['id', 'name', 'posts.id', 'posts.title'],
+      sortBy: [{ property: 'id', direction: 'ASC' }],
+    });
+
+    const result = generatePaginationQuery(parsed, {
+      dialect: 'mysql',
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name },
+      relations: [
+        defineRelation({
+          relationName: 'posts',
+          fields: { id: posts.id, title: posts.title },
+          foreignKey: posts.authorId,
+          parentKey: users.id,
+          buildQuery: (select) => db.select(select).from(posts),
+        }),
+      ],
+    });
+
+    const { data, pagination } = await result.execute();
+
+    expect(data).toHaveLength(3);
+    // Alice (id=1) has 2 posts
+    expect(data[0]).toHaveProperty('name', 'Alice');
+    expect(data[0]?.posts).toHaveLength(2);
+    // Bob (id=2) has 1 post
+    expect(data[1]).toHaveProperty('name', 'Bob');
+    expect(data[1]?.posts).toHaveLength(1);
+    // Charlie (id=3) has no posts
+    expect(data[2]).toHaveProperty('name', 'Charlie');
+    expect(data[2]?.posts).toHaveLength(0);
+
+    // Pagination metadata: count derived from buildQuery automatically
+    expect(pagination).toEqual(
+      expect.objectContaining({
+        itemsPerPage: 3,
+        totalItems: 5,
+        currentPage: 1,
+        totalPages: 2,
+      }),
+    );
+  });
+
+  it('execute() applies filters to both data and count', async () => {
+    await seedUsers();
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+      select: ['id', 'name'],
+      filters: {
+        type: 'filter',
+        field: 'status',
+        condition: { group: 'status', op: '$eq', value: 'ACTIVE' },
+      },
+    });
+
+    const result = generatePaginationQuery(parsed, {
+      dialect: 'mysql',
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name, status: users.status },
+      relations: [],
+    });
+
+    const { data, pagination } = await result.execute();
+
+    expect(data).toHaveLength(3);
+    expect(pagination).toEqual(
+      expect.objectContaining({
+        totalItems: 3,
+        totalPages: 1,
+      }),
+    );
   });
 });

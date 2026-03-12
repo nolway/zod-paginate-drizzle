@@ -14,16 +14,288 @@ import {
   lte as drizzleLte,
   not as drizzleNot,
   or as drizzleOr,
+  sql,
 } from 'drizzle-orm';
 import type { Column, GetColumnData, SQL } from 'drizzle-orm';
 import type {
   AllowedPath,
-  DataSchema,
   Condition,
+  CursorPaginationResponseMeta,
+  DataSchema,
+  LimitOffsetPaginationResponseMeta,
   PaginationQueryParams,
+  PaginationType,
+  SelectQueryParams,
   SortDirection,
   WhereNode,
 } from 'zod-paginate';
+
+// ─── Relation types ─────────────────────────────────────────────────────────
+
+/**
+ * Describes a one-to-many (or one-to-one) relation that must be fetched
+ * as a separate query and assembled back into the parent rows.
+ *
+ * @example
+ * ```ts
+ * // Simple (single FK):
+ * const postsRelation: DrizzleRelation<typeof DrizzleSqlColumn> = {
+ *   relationName: 'posts',
+ *   fields: { id: postsTable.id, title: postsTable.title },
+ *   foreignKey: postsTable.authorId,
+ *   parentKey: usersTable.id,
+ *   buildQuery: (select) => db.select(select).from(postsTable),
+ * };
+ *
+ * // Composite FK:
+ * const itemsRelation: DrizzleRelation<typeof DrizzleSqlColumn> = {
+ *   relationName: 'items',
+ *   fields: { quantity: orderItemsTable.quantity },
+ *   foreignKey: [orderItemsTable.orderId, orderItemsTable.productId],
+ *   parentKey: [ordersTable.orderId, ordersTable.productId],
+ *   buildQuery: (select) => db.select(select).from(orderItemsTable),
+ * };
+ * ```
+ */
+export interface DrizzleRelation<
+  TColumn,
+  TName extends string = string,
+  TRelFields extends Record<string, TColumn> = Record<string, TColumn>,
+> {
+  /** Name used as the key in the assembled result (e.g. `"posts"`). */
+  relationName: TName;
+  /** Column map for the child table — keys are the sub-field names. */
+  fields: TRelFields;
+  /**
+   * The column(s) on the **child** table that reference the parent.
+   * Use an array for composite foreign keys.
+   */
+  foreignKey: TColumn | TColumn[];
+  /**
+   * The column(s) on the **parent** table referenced by `foreignKey`.
+   * Must have the same length as `foreignKey` when using arrays.
+   */
+  parentKey: TColumn | TColumn[];
+  /**
+   * Factory that builds the base query for this relation.
+   * Receives the computed select shape (column subset) and must return
+   * a Drizzle auto-query (same contract as the main `buildQuery`).
+   *
+   * Uses method syntax to enable TypeScript bivariance — this allows
+   * implementations to use their dialect-specific column types
+   * (e.g. `PgColumn`, `MySqlColumn`) without type conflicts.
+   */
+  buildQuery(selectShape: DrizzleSelectShape<TColumn>): DrizzleAutoQuery;
+}
+
+// ─── Relation type inference utilities ────────────────────────────────────
+
+/**
+ * Extracts the `relationName` string literal from a `DrizzleRelation`.
+ */
+export type InferRelationName<TRel> = TRel extends { relationName: infer TName extends string }
+  ? TName
+  : string;
+
+/**
+ * Extracts the `fields` record type from a `DrizzleRelation` and applies
+ * `InferFieldsData` to produce the child-row data type.
+ */
+export type InferRelationRow<TRel> = TRel extends {
+  fields: infer TRelFields extends Record<string, unknown>;
+}
+  ? InferFieldsData<TRelFields>
+  : Record<string, unknown>;
+
+/**
+ * Structural constraint for `DrizzleRelation` that is as strongly typed as
+ * `DrizzleRelation<DrizzleSqlColumn>` for all properties **except** `buildQuery`.
+ *
+ * `buildQuery` uses `DrizzleSelectShape<DrizzleSqlColumn>` as its parameter
+ * type — with method-signature bivariance this is compatible with *any*
+ * concrete `DrizzleSelectShape<T extends DrizzleSqlColumn>`, which lets
+ * users write `(select) => db.select(select).from(table)` without an
+ * explicit type annotation on `select`.
+ */
+export interface AnyDrizzleRelation {
+  relationName: string;
+  fields: Record<string, DrizzleSqlColumn>;
+  foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  buildQuery(selectShape: DrizzleSelectShape<DrizzleSqlColumn>): DrizzleAutoQuery;
+}
+
+/**
+ * Helper that captures the column type from a relation object literal so
+ * that `buildQuery`'s `select` parameter is correctly inferred without
+ * manual type annotations.
+ *
+ * `TFieldColumn` is inferred from `fields` only (covariant position), then
+ * used to contextually type the `buildQuery` callback parameter as
+ * `Record<string, TFieldColumn>`. `foreignKey` and `parentKey` accept any
+ * `DrizzleSqlColumn` independently, avoiding column-type conflicts between
+ * child and parent tables.
+ *
+ * @example
+ * ```ts
+ * relations: [
+ *   defineRelation({
+ *     relationName: 'posts',
+ *     fields: { id: posts.id, title: posts.title },
+ *     foreignKey: posts.authorId,
+ *     parentKey: users.id,
+ *     buildQuery: (select) => db.select(select).from(posts),
+ *   }),
+ * ]
+ * ```
+ */
+export function defineRelation<
+  TFieldColumn extends DrizzleSqlColumn,
+  const TName extends string,
+  TRelFields extends Record<string, TFieldColumn>,
+>(relation: {
+  relationName: TName;
+  fields: TRelFields & Record<string, TFieldColumn>;
+  foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
+}): AnyDrizzleRelation & { relationName: TName; fields: TRelFields } {
+  // The input is structurally compatible — AnyDrizzleRelation.buildQuery uses
+  // method syntax, so TypeScript's parameter bivariance allows assigning a
+  // concrete `DrizzleSelectShape<TFieldColumn>` callback to the wider
+  // `DrizzleSelectShape<DrizzleSqlColumn>` signature.
+  const result: AnyDrizzleRelation & { relationName: TName; fields: TRelFields } = relation;
+  return result;
+}
+
+/**
+ * Given a **tuple** of `DrizzleRelation` entries, builds the intersection
+ * type `{ name1: Row1[]; name2: Row2[]; … }` so the assembled result is
+ * fully typed.
+ *
+ * @example
+ * ```ts
+ * type Rels = [DrizzleRelation<Col, 'posts', { id: Col; title: Col }>];
+ * type Data = InferRelationsData<Rels>;
+ * //   ^? { posts: Partial<{ id: number; title: string | null }>[] }
+ * ```
+ */
+export type InferRelationsData<TRelations extends readonly AnyDrizzleRelation[]> =
+  TRelations extends readonly [infer TFirst, ...infer TRest]
+    ? Record<InferRelationName<TFirst>, InferRelationRow<TFirst>[]> &
+        (TRest extends readonly AnyDrizzleRelation[] ? InferRelationsData<TRest> : unknown)
+    : unknown;
+
+/**
+ * The assembled row type: main fields intersected with all relation arrays.
+ *
+ * @example
+ * ```ts
+ * type Row = InferAssembledRow<{ id: ColType; name: ColType }, Relations>;
+ * //   ^? Partial<{ id: number; name: string | null }> & { posts: …[] }
+ * ```
+ */
+export type InferAssembledRow<
+  TFields extends Record<string, unknown>,
+  TRelations extends readonly AnyDrizzleRelation[],
+> = InferFieldsData<TFields> & InferRelationsData<TRelations>;
+
+/**
+ * A single relation query result returned alongside the main query.
+ */
+export interface DrizzleRelationQuery<TColumn> {
+  /** The relation name (matches `DrizzleRelation.relationName`). */
+  relationName: string;
+  /** The parent-side column(s) to match rows against. */
+  parentKey: TColumn | TColumn[];
+  /** The alias(es) used for the foreign key(s) in the child select shape. */
+  foreignKeyAlias: string | string[];
+  /** The ready-to-execute Drizzle dynamic query. */
+  query: DrizzleDynamicQuery;
+}
+
+/**
+ * Extended result of `generatePaginationQuery`.
+ *
+ * Provides both low-level access (`query`, `clauses`, `relationQueries`,
+ * `assemble`) **and** a high-level `execute()` that runs every query,
+ * assembles relations and computes pagination metadata in a single call.
+ */
+export interface DrizzlePaginationResult<
+  TColumn,
+  TFields extends Record<string, unknown> = Record<string, unknown>,
+  TRelations extends readonly AnyDrizzleRelation[] = readonly AnyDrizzleRelation[],
+  TType extends PaginationType = PaginationType,
+> {
+  /** Ready-to-execute main query (with WHERE / ORDER / LIMIT / OFFSET applied). */
+  query: DrizzleDynamicQuery;
+  /** Raw pagination clauses for advanced use-cases. */
+  clauses: DrizzlePaginationClauses<TColumn, SQL, SQL>;
+  /** Per-relation sub-queries. */
+  relationQueries: DrizzleRelationQuery<DrizzleSqlColumn>[];
+  /**
+   * Low-level helper: assembles main rows + relation result arrays into
+   * nested objects. Same logic as the standalone `assembleDrizzleRelations`.
+   */
+  assemble: (
+    mainRows: Record<string, unknown>[],
+    relationResults: Record<string, unknown>[][],
+  ) => InferAssembledRow<TFields, TRelations>[];
+  /**
+   * Executes **all** queries (main + count + relations), assembles nested
+   * objects and builds the pagination metadata in one call.
+   *
+   * @returns `{ data, pagination }` — ready to send as the HTTP response body.
+   */
+  execute: () => Promise<DrizzlePaginationExecuteResult<TFields, TRelations, TType>>;
+}
+
+/** Maps a `PaginationType` to its corresponding response metadata type. */
+export type InferPaginationResponseMeta<TType extends PaginationType = PaginationType> =
+  TType extends 'LIMIT_OFFSET'
+    ? LimitOffsetPaginationResponseMeta
+    : TType extends 'CURSOR'
+      ? CursorPaginationResponseMeta
+      : LimitOffsetPaginationResponseMeta | CursorPaginationResponseMeta;
+
+/** Return type of `DrizzlePaginationResult.execute()`. */
+export interface DrizzlePaginationExecuteResult<
+  TFields extends Record<string, unknown> = Record<string, unknown>,
+  TRelations extends readonly AnyDrizzleRelation[] = readonly AnyDrizzleRelation[],
+  TType extends PaginationType = PaginationType,
+> {
+  data: InferAssembledRow<TFields, TRelations>[];
+  pagination: InferPaginationResponseMeta<TType>;
+}
+
+/**
+ * Result of `generateSelectQuery`.
+ *
+ * Lighter variant of `DrizzlePaginationResult` — no pagination
+ * clauses. Includes `assemble` and `execute` helpers.
+ */
+export interface DrizzleSelectWithRelationsResult<
+  TFields extends Record<string, unknown> = Record<string, unknown>,
+  TRelations extends readonly AnyDrizzleRelation[] = readonly AnyDrizzleRelation[],
+> {
+  /** Ready-to-execute main query. */
+  query: DrizzleDynamicQuery;
+  /** Per-relation sub-queries. */
+  relationQueries: DrizzleRelationQuery<DrizzleSqlColumn>[];
+  /**
+   * Low-level helper: assembles main rows + relation result arrays into
+   * nested objects.
+   */
+  assemble: (
+    mainRows: Record<string, unknown>[],
+    relationResults: Record<string, unknown>[][],
+  ) => InferAssembledRow<TFields, TRelations>[];
+  /**
+   * Executes **all** queries (main + relations), assembles nested objects
+   * and returns `{ data }`.
+   */
+  execute: () => Promise<{ data: InferAssembledRow<TFields, TRelations>[] }>;
+}
 
 export type DrizzleSelectShape<TColumn> = Record<string, TColumn>;
 
@@ -78,6 +350,10 @@ export interface DrizzlePaginationClauses<TColumn, TWhereExpr, TOrderByExpr> {
   orderBy?: TOrderByExpr[];
   limit?: number;
   offset?: number;
+  /** Present only for `CURSOR` pagination — the incoming cursor value (if any). */
+  cursor?: number | string;
+  /** Present only for `CURSOR` pagination — the resolved cursor property name. */
+  cursorProperty?: string;
 }
 
 export type DrizzleSqlColumn = Parameters<typeof drizzleIlike>[0];
@@ -372,7 +648,7 @@ function buildDrizzleClausesFromPagination<
     aliasBuilder,
   );
 
-  const where = pagination.filters
+  let where = pagination.filters
     ? whereNodeToDrizzleExpr(
         pagination.filters,
         config.fields,
@@ -396,9 +672,35 @@ function buildDrizzleClausesFromPagination<
   const limit = pagination.limit;
 
   let offset: number | undefined;
+  let cursor: number | string | undefined;
+  let cursorProperty: string | undefined;
+
   if (pagination.type === 'LIMIT_OFFSET' && typeof pagination.page === 'number') {
     const safePage = pagination.page > 0 ? pagination.page : 1;
     offset = (safePage - 1) * limit;
+  }
+
+  // ── Cursor-based pagination ───────────────────────────────────
+  if (pagination.type === 'CURSOR') {
+    cursorProperty = `${pagination.cursorProperty}`;
+
+    if (pagination.cursor !== undefined) {
+      cursor = pagination.cursor;
+      const cursorColumn = getMappedColumn(cursorProperty, config.fields, strictFieldMapping);
+
+      if (cursorColumn) {
+        // Determine direction from sortBy: if the cursor property has DESC → use "<", else ">".
+        const cursorSort = pagination.sortBy?.find((s) => `${s.property}` === cursorProperty);
+        const cursorDirection = cursorSort?.direction ?? 'ASC';
+        const cursorExpr =
+          cursorDirection === 'DESC'
+            ? config.operators.lt(cursorColumn, cursor)
+            : config.operators.gt(cursorColumn, cursor);
+
+        // Combine with existing where clause.
+        where = where ? config.operators.and(where, cursorExpr) : cursorExpr;
+      }
+    }
   }
 
   return {
@@ -407,6 +709,8 @@ function buildDrizzleClausesFromPagination<
     orderBy: orderBy && orderBy.length > 0 ? orderBy : undefined,
     limit,
     offset,
+    cursor,
+    cursorProperty,
   };
 }
 
@@ -469,4 +773,873 @@ export function applyDrizzlePaginationOnQuery<
   }
 
   return { query, clauses };
+}
+
+// ─── Relation support ─────────────────────────────────────────────────────
+
+/** Internal base for the foreign key alias injected into relation selects. */
+const RELATION_FK_ALIAS = '__fk';
+
+/** Wraps a single value or array into a consistent array. */
+function toArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * Builds the foreign key alias(es) for a relation.
+ * Single FK → `'__fk'`, composite → `['__fk_0', '__fk_1', ...]`.
+ */
+function buildFkAliases(foreignKeys: unknown[]): string | string[] {
+  if (foreignKeys.length === 1) return RELATION_FK_ALIAS;
+  const aliases: string[] = [];
+  for (let i = 0; i < foreignKeys.length; i++) {
+    aliases.push(`${RELATION_FK_ALIAS}_${i}`);
+  }
+  return aliases;
+}
+
+/**
+ * Builds the parent key alias(es) for a relation.
+ * Single PK → `'__pk_name'`, composite → `['__pk_name_0', '__pk_name_1', ...]`.
+ */
+function buildPkAliases(relationName: string, parentKeys: unknown[]): string | string[] {
+  if (parentKeys.length === 1) return `__pk_${relationName}`;
+  const aliases: string[] = [];
+  for (let i = 0; i < parentKeys.length; i++) {
+    aliases.push(`__pk_${relationName}_${i}`);
+  }
+  return aliases;
+}
+
+/**
+ * Builds a composite lookup key from multiple values.
+ * Single value → used directly, composite → JSON-serialized tuple.
+ */
+function compositeKey(aliases: string | string[], row: Record<string, unknown>): unknown {
+  if (typeof aliases === 'string') return row[aliases];
+  const parts = aliases.map((a) => row[a]);
+  return JSON.stringify(parts);
+}
+
+/** Returns true when a composite key contains no null/undefined parts. */
+function isKeyValid(aliases: string | string[], row: Record<string, unknown>): boolean {
+  if (typeof aliases === 'string') {
+    const v = row[aliases];
+    return v !== undefined && v !== null;
+  }
+  return aliases.every((a) => {
+    const v = row[a];
+    return v !== undefined && v !== null;
+  });
+}
+
+/** Returns a Set of all internal alias strings (handles both single and composite). */
+function collectAliases(aliases: string | string[]): string[] {
+  return typeof aliases === 'string' ? [aliases] : aliases;
+}
+
+/**
+ * Checks whether a field path belongs to a relation (starts with `"relationName."`).
+ * If so, returns the sub-path (e.g. `"posts.title"` → `"title"`).
+ */
+function stripRelationPrefix(fieldPath: string, relationName: string): string | undefined {
+  const prefix = `${relationName}.`;
+  if (fieldPath.startsWith(prefix)) {
+    return fieldPath.slice(prefix.length);
+  }
+  return undefined;
+}
+
+/**
+ * Returns `true` when any relation name matches the field path prefix.
+ */
+function belongsToAnyRelation(fieldPath: string, relationNames: string[]): boolean {
+  return relationNames.some((name) => stripRelationPrefix(fieldPath, name) !== undefined);
+}
+
+/**
+ * Recursively rewrites a `WhereNode` tree, keeping only filters that belong
+ * to a given relation prefix (stripping the prefix from field names).
+ * Returns `undefined` when no filter in the subtree matches.
+ */
+function rewriteWhereNodeForRelation(node: WhereNode, relationName: string): WhereNode | undefined {
+  if (node.type === 'filter') {
+    const subPath = stripRelationPrefix(node.field, relationName);
+    if (subPath === undefined) return undefined;
+    return { ...node, field: subPath };
+  }
+
+  const rewrittenItems = node.items
+    .map((child) => rewriteWhereNodeForRelation(child, relationName))
+    .filter((child): child is WhereNode => child !== undefined);
+
+  if (rewrittenItems.length === 0) return undefined;
+  if (rewrittenItems.length === 1) return rewrittenItems[0];
+
+  return { ...node, items: rewrittenItems };
+}
+
+/**
+ * Recursively rewrites a `WhereNode` tree, removing filters that belong
+ * to any of the provided relation names (keeping only main-table filters).
+ * Returns `undefined` when all filters were stripped.
+ */
+function rewriteWhereNodeWithoutRelations(
+  node: WhereNode,
+  relationNames: string[],
+): WhereNode | undefined {
+  if (node.type === 'filter') {
+    return belongsToAnyRelation(node.field, relationNames) ? undefined : node;
+  }
+
+  const keptItems = node.items
+    .map((child) => rewriteWhereNodeWithoutRelations(child, relationNames))
+    .filter((child): child is WhereNode => child !== undefined);
+
+  if (keptItems.length === 0) return undefined;
+  if (keptItems.length === 1) return keptItems[0];
+
+  return { ...node, items: keptItems };
+}
+
+/**
+ * Executes a `COUNT(*)` query using the provided `buildQuery` factory.
+ *
+ * Works around the type mismatch between `TColumn`-typed `buildQuery` and
+ * the `SQL` type of `sql\`count(*)\`` by leveraging the fact that Drizzle's
+ * runtime `select()` accepts any column-like value.
+ */
+async function executeCountQuery<TColumn extends DrizzleSqlColumn>(
+  buildQuery: (selectShape: DrizzleSelectShape<TColumn>) => DrizzleAutoQuery,
+  where: SQL | undefined,
+): Promise<number> {
+  const countSelect = { count: sql<number>`count(*)` };
+  // @ts-expect-error - Drizzle accepts SQL in select shape at runtime
+  let countQuery = buildQuery(countSelect).$dynamic();
+  if (where) {
+    countQuery = countQuery.where(where);
+  }
+  const countRows: Record<string, unknown>[] = await countQuery;
+  const rawCount = countRows[0]?.count;
+  return Number(rawCount ?? 0);
+}
+
+/**
+ * Builds a single relation query from the parsed pagination, extracting only
+ * the select/filter/sort fields prefixed with the relation name.
+ */
+function buildSingleRelationQuery(
+  pagination: PaginationQueryParams<DataSchema>['pagination'],
+  relation: AnyDrizzleRelation,
+  operators: DrizzleSqlOperatorSet,
+  selectAlias: (fieldPath: string) => string,
+  strictFieldMapping: boolean,
+): DrizzleRelationQuery<DrizzleSqlColumn> {
+  // ── Select ──────────────────────────────────────────────────────
+  const relationSelectPaths: string[] = [];
+
+  if (pagination.select) {
+    for (const fieldPath of pagination.select) {
+      const subPath = stripRelationPrefix(fieldPath, relation.relationName);
+      if (subPath !== undefined) {
+        relationSelectPaths.push(subPath);
+      }
+    }
+  }
+
+  const relationFields: DrizzleFieldMap<DataSchema, DrizzleSqlColumn> = relation.fields;
+
+  const selectShape = buildSelectShapeInternal(
+    relationSelectPaths,
+    relationFields,
+    strictFieldMapping,
+    selectAlias,
+  );
+
+  // Always include the foreign key(s) so we can match parent ↔ child.
+  const foreignKeys = toArray(relation.foreignKey);
+  const fkAliases = buildFkAliases(foreignKeys);
+  const fkAliasList = collectAliases(fkAliases);
+  for (let i = 0; i < foreignKeys.length; i++) {
+    const alias = fkAliasList[i];
+    const col = foreignKeys[i];
+    if (alias !== undefined && col !== undefined) {
+      selectShape[alias] = col;
+    }
+  }
+
+  // ── Filters ─────────────────────────────────────────────────────
+  let relationWhere: SQL | undefined;
+
+  if (pagination.filters) {
+    const rewrittenFilters = rewriteWhereNodeForRelation(pagination.filters, relation.relationName);
+    if (rewrittenFilters) {
+      relationWhere = whereNodeToDrizzleExpr(
+        rewrittenFilters,
+        relationFields,
+        operators,
+        strictFieldMapping,
+      );
+    }
+  }
+
+  // ── Sort ────────────────────────────────────────────────────────
+  const relationOrderBy: SQL[] = [];
+
+  if (pagination.sortBy) {
+    for (const sortItem of pagination.sortBy) {
+      const subPath = stripRelationPrefix(sortItem.property, relation.relationName);
+      if (subPath === undefined) continue;
+
+      const mappedColumn = getMappedColumn(subPath, relationFields, strictFieldMapping);
+      if (!mappedColumn) continue;
+
+      relationOrderBy.push(directionToOrderExpr(sortItem.direction, mappedColumn, operators));
+    }
+  }
+
+  // ── Build query ─────────────────────────────────────────────────
+  let query = relation.buildQuery(selectShape).$dynamic();
+
+  if (relationWhere) {
+    query = query.where(relationWhere);
+  }
+  if (relationOrderBy.length > 0) {
+    query = query.orderBy(...relationOrderBy);
+  }
+  // Note: no limit/offset on relation queries — we fetch all matching children.
+
+  return {
+    relationName: relation.relationName,
+    parentKey: relation.parentKey,
+    foreignKeyAlias: fkAliases,
+    query,
+  };
+}
+
+/** Configuration object for `generatePaginationQuery`. */
+export interface GeneratePaginationQueryConfig<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  TRelations extends readonly AnyDrizzleRelation[],
+> {
+  dialect: DrizzleDialect;
+  buildQuery: (
+    selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
+  ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+  fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+  relations?: TRelations;
+  strictFieldMapping?: boolean;
+  selectAlias?: (fieldPath: string) => string;
+  operators?: DrizzleSqlOperatorSet;
+}
+
+/**
+ * Applies Drizzle pagination **with relation support**.
+ *
+ * Works exactly like `applyDrizzlePaginationOnQuery` for the main table,
+ * but also builds separate queries for each declared `relation`.
+ *
+ * Relation-prefixed fields (e.g. `"posts.title"`) in `select`, `filters`, and
+ * `sortBy` are **automatically routed** to the corresponding relation query and
+ * **stripped from the main query**.
+ *
+ * After executing all queries, use `assembleDrizzleRelations` to reconstruct
+ * nested objects.
+ *
+ * @example
+ * ```ts
+ * const result = generatePaginationQuery(parsed, {
+ *   dialect: 'pg',
+ *   buildQuery: (select) => db.select(select).from(usersTable),
+ *   fields: { id: usersTable.id, name: usersTable.name },
+ *   relations: [
+ *     {
+ *       relationName: 'posts',
+ *       fields: { id: postsTable.id, title: postsTable.title },
+ *       foreignKey: postsTable.authorId,
+ *       parentKey: usersTable.id,
+ *       buildQuery: (select) => db.select(select).from(postsTable),
+ *     },
+ *   ],
+ * });
+ *
+ * // One-call approach:
+ * const { data, pagination } = await result.execute();
+ *
+ * // Or manual approach:
+ * const [mainRows, ...relationRows] = await Promise.all([
+ *   result.query,
+ *   ...result.relationQueries.map((r) => r.query),
+ * ]);
+ * const data = result.assemble(mainRows, relationRows);
+ * ```
+ */
+export function generatePaginationQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
+  parsed: PaginationQueryParams<TSchema, 'LIMIT_OFFSET'>,
+  config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
+): DrizzlePaginationResult<TColumn, TFields, TRelations, 'LIMIT_OFFSET'>;
+
+export function generatePaginationQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
+  parsed: PaginationQueryParams<TSchema, 'CURSOR'>,
+  config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
+): DrizzlePaginationResult<TColumn, TFields, TRelations, 'CURSOR'>;
+
+export function generatePaginationQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+  TType extends PaginationType = PaginationType,
+>(
+  parsed: PaginationQueryParams<TSchema, TType>,
+  config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
+): DrizzlePaginationResult<TColumn, TFields, TRelations, TType>;
+
+export function generatePaginationQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
+  parsed: PaginationQueryParams<TSchema>,
+  config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
+): DrizzlePaginationResult<TColumn, TFields, TRelations> {
+  const operators = config.operators ?? getOperatorsForDialect(config.dialect);
+  const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
+  const strictFieldMapping = config.strictFieldMapping ?? true;
+  // @ts-expect-error -- empty array is a valid runtime fallback for TRelations
+  const relations: TRelations = config.relations ?? [];
+  const relationNames = relations.map((r) => r.relationName);
+
+  // ── Partition the parsed pagination ─────────────────────────────
+  const pagination = parsed.pagination;
+
+  // Remove relation-prefixed paths from the main select.
+  const mainSelect = pagination.select
+    ? pagination.select.filter((fp) => !belongsToAnyRelation(`${fp}`, relationNames))
+    : undefined;
+
+  // Remove relation-prefixed filters from the main query.
+  const mainFilters = pagination.filters
+    ? rewriteWhereNodeWithoutRelations(pagination.filters, relationNames)
+    : undefined;
+
+  // Remove relation-prefixed sort items from the main query.
+  const mainSortBy = pagination.sortBy
+    ? pagination.sortBy.filter(
+        (sortItem) => !belongsToAnyRelation(`${sortItem.property}`, relationNames),
+      )
+    : undefined;
+
+  // Inject parent key columns (needed for assembling).
+  const parentKeyFields: DrizzleSelectShape<DrizzleSqlColumn> = {};
+  for (const relation of relations) {
+    const parentKeys = toArray(relation.parentKey);
+    const pkAliases = collectAliases(buildPkAliases(relation.relationName, parentKeys));
+    for (let i = 0; i < parentKeys.length; i++) {
+      const alias = pkAliases[i];
+      const col = parentKeys[i];
+      if (alias !== undefined && col !== undefined) {
+        parentKeyFields[alias] = col;
+      }
+    }
+  }
+
+  // Build the main pagination clauses (without relation fields).
+  const mainPagination: PaginationQueryParams<DataSchema>['pagination'] = {
+    ...pagination,
+    select: mainSelect,
+    filters: mainFilters,
+    sortBy: mainSortBy && mainSortBy.length > 0 ? mainSortBy : undefined,
+  };
+
+  const clauses = buildDrizzleClausesFromPagination<TSchema, TColumn, SQL, SQL>(
+    { pagination: mainPagination } satisfies PaginationQueryParams<DataSchema>,
+    {
+      fields: config.fields,
+      operators,
+      selectAlias: aliasBuilder,
+      strictFieldMapping,
+    },
+  );
+
+  // Inject parent key columns into the select shape.
+  Object.assign(clauses.select, parentKeyFields);
+
+  let query: DrizzleDynamicQuery = config.buildQuery(clauses.select).$dynamic();
+
+  if (clauses.where) {
+    query = query.where(clauses.where);
+  }
+  if (clauses.orderBy && clauses.orderBy.length > 0) {
+    query = query.orderBy(...clauses.orderBy);
+  }
+  if (typeof clauses.limit === 'number') {
+    query = query.limit(clauses.limit);
+  }
+  if (typeof clauses.offset === 'number') {
+    query = query.offset(clauses.offset);
+  }
+
+  // ── Build relation queries ──────────────────────────────────────
+  const relationQueries = relations.map((relation) =>
+    buildSingleRelationQuery(pagination, relation, operators, aliasBuilder, strictFieldMapping),
+  );
+
+  // ── assemble / execute helpers ──────────────────────────────────
+  type AssembledRow = InferAssembledRow<TFields, TRelations>;
+
+  const assemble = (
+    mainRows: Record<string, unknown>[],
+    relationResults: Record<string, unknown>[][],
+  ): AssembledRow[] =>
+    coerceAssembledRows<AssembledRow>(
+      assembleDrizzleRelations(mainRows, relationQueries, relationResults),
+    );
+
+  type ExecuteResult = DrizzlePaginationExecuteResult<TFields, TRelations>;
+
+  const execute = async (): Promise<ExecuteResult> => {
+    // Run main + relation queries in parallel.
+    const promises: PromiseLike<Record<string, unknown>[]>[] = [
+      query,
+      ...relationQueries.map((r) => r.query),
+    ];
+
+    const results = await Promise.all(promises);
+    const mainRows = results[0] ?? [];
+    const relationResults = results.slice(1);
+    const data = assemble(mainRows, relationResults);
+
+    // Build pagination metadata depending on the type.
+    if (parsed.pagination.type === 'LIMIT_OFFSET') {
+      // Derive count from buildQuery automatically, applying the same WHERE clause.
+      const totalItems = await executeCountQuery(config.buildQuery, clauses.where);
+
+      const paginationMeta = buildLimitOffsetResponseMeta(
+        { pagination: parsed.pagination },
+        totalItems,
+      );
+      return { data, pagination: paginationMeta };
+    }
+
+    // CURSOR
+    const paginationMeta = buildCursorResponseMeta(
+      { pagination: parsed.pagination },
+      mainRows,
+      undefined,
+      aliasBuilder,
+    );
+    return { data, pagination: paginationMeta };
+  };
+
+  return { query, clauses, relationQueries, assemble, execute };
+}
+
+/**
+ * Applies Drizzle select **with relation support** — the select-only counterpart
+ * of `generatePaginationQuery`.
+ *
+ * Works with `SelectQueryParams` (returned by `select()` from `zod-paginate`)
+ * instead of the full `PaginationQueryParams`. Since `select()` only produces a
+ * `select` array (no filters, sorting, or limit/offset), this function builds a
+ * simpler set of queries.
+ *
+ * Relation-prefixed fields (e.g. `"posts.title"`) are **automatically routed**
+ * to the corresponding relation query and **stripped from the main query**.
+ *
+ * After executing all queries, use `assembleDrizzleRelations` to reconstruct
+ * nested objects (the assembler works identically for both flavours).
+ *
+ * @example
+ * ```ts
+ * const result = generateSelectQuery(parsed, {
+ *   buildQuery: (select) => db.select(select).from(usersTable),
+ *   fields: { id: usersTable.id, name: usersTable.name },
+ *   relations: [
+ *     {
+ *       relationName: 'posts',
+ *       fields: { id: postsTable.id, title: postsTable.title },
+ *       foreignKey: postsTable.authorId,
+ *       parentKey: usersTable.id,
+ *       buildQuery: (select) => db.select(select).from(postsTable),
+ *     },
+ *   ],
+ * });
+ *
+ * // One-call approach:
+ * const { data } = await result.execute();
+ *
+ * // Or manual approach:
+ * const [mainRows, ...relationRows] = await Promise.all([
+ *   result.query,
+ *   ...result.relationQueries.map((r) => r.query),
+ * ]);
+ * const data = result.assemble(mainRows, relationRows);
+ * ```
+ */
+export function generateSelectQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
+  parsed: SelectQueryParams<TSchema>,
+  config: {
+    buildQuery: (
+      selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
+    ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    relations?: TRelations;
+    strictFieldMapping?: boolean;
+    selectAlias?: (fieldPath: string) => string;
+  },
+): DrizzleSelectWithRelationsResult<TFields, TRelations> {
+  const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
+  const strictFieldMapping = config.strictFieldMapping ?? true;
+  // @ts-expect-error -- empty array is a valid runtime fallback for TRelations
+  const relations: TRelations = config.relations ?? [];
+  const relationNames = relations.map((r) => r.relationName);
+
+  // ── Partition select paths ──────────────────────────────────────
+  const mainSelect = parsed.select.filter((fp) => !belongsToAnyRelation(`${fp}`, relationNames));
+
+  // ── Build the main select shape ─────────────────────────────────
+  const mainSelectShape = buildSelectShapeInternal(
+    mainSelect.map(String),
+    config.fields,
+    strictFieldMapping,
+    aliasBuilder,
+  );
+
+  // Inject parent key columns (needed for assembling).
+  const parentKeyFields: DrizzleSelectShape<DrizzleSqlColumn> = {};
+  for (const relation of relations) {
+    const parentKeys = toArray(relation.parentKey);
+    const pkAliases = collectAliases(buildPkAliases(relation.relationName, parentKeys));
+    for (let i = 0; i < parentKeys.length; i++) {
+      const alias = pkAliases[i];
+      const col = parentKeys[i];
+      if (alias !== undefined && col !== undefined) {
+        parentKeyFields[alias] = col;
+      }
+    }
+  }
+  Object.assign(mainSelectShape, parentKeyFields);
+
+  const query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
+
+  // ── Build relation queries (select-only, no filters/sort) ───────
+  const relationQueries = relations.map((relation): DrizzleRelationQuery<DrizzleSqlColumn> => {
+    const relationSelectPaths: string[] = [];
+    for (const fieldPath of parsed.select) {
+      const subPath = stripRelationPrefix(fieldPath, relation.relationName);
+      if (subPath !== undefined) {
+        relationSelectPaths.push(subPath);
+      }
+    }
+
+    const relationFields: DrizzleFieldMap<DataSchema, DrizzleSqlColumn> = relation.fields;
+
+    const selectShape = buildSelectShapeInternal(
+      relationSelectPaths,
+      relationFields,
+      strictFieldMapping,
+      aliasBuilder,
+    );
+
+    // Always include the foreign key(s) so we can match parent ↔ child.
+    const foreignKeys = toArray(relation.foreignKey);
+    const fkAliases = buildFkAliases(foreignKeys);
+    const fkAliasList = collectAliases(fkAliases);
+    for (let j = 0; j < foreignKeys.length; j++) {
+      const alias = fkAliasList[j];
+      const col = foreignKeys[j];
+      if (alias !== undefined && col !== undefined) {
+        selectShape[alias] = col;
+      }
+    }
+
+    const relationQuery: DrizzleDynamicQuery = relation.buildQuery(selectShape).$dynamic();
+
+    return {
+      relationName: relation.relationName,
+      parentKey: relation.parentKey,
+      foreignKeyAlias: fkAliases,
+      query: relationQuery,
+    };
+  });
+
+  // ── assemble / execute helpers ──────────────────────────────────
+  type AssembledRow = InferAssembledRow<TFields, TRelations>;
+
+  const assemble = (
+    mainRows: Record<string, unknown>[],
+    relationResults: Record<string, unknown>[][],
+  ): AssembledRow[] =>
+    coerceAssembledRows<AssembledRow>(
+      assembleDrizzleRelations(mainRows, relationQueries, relationResults),
+    );
+
+  const execute = async (): Promise<{ data: AssembledRow[] }> => {
+    const promises: PromiseLike<Record<string, unknown>[]>[] = [
+      query,
+      ...relationQueries.map((r) => r.query),
+    ];
+
+    const results = await Promise.all(promises);
+    const mainRows = results[0] ?? [];
+    const relationResults = results.slice(1);
+    const data = assemble(mainRows, relationResults);
+
+    return { data };
+  };
+
+  return { query, relationQueries, assemble, execute };
+}
+
+/**
+ * Identity helper that reinterprets assembled `Record<string, unknown>[]` rows
+ * as a more specific `TRow[]` type.
+ *
+ * At runtime this is a no-op (returns the same reference). It exists so that
+ * callers with known generics can bridge the gap between the untyped output
+ * of `assembleDrizzleRelations` and their inferred assembled-row type
+ * **without** using `as` assertions.
+ */
+function coerceAssembledRows<TRow extends Record<string, unknown>>(
+  rows: Record<string, unknown>[],
+): TRow[] {
+  // Identity cast: rows are structurally TRow at runtime; we return the same
+  // reference typed more narrowly. This helper centralises the single
+  // unavoidable generic widening so call-sites remain assertion-free.
+  // @ts-expect-error -- Record<string, unknown>[] is a runtime superset of TRow[]
+  return rows;
+}
+
+/**
+ * Assembles the results of the main query and its relation queries into
+ * nested objects.
+ *
+ * For each parent row, looks up the matching child rows via the parent-key /
+ * foreign-key link and attaches them as an array property.
+ *
+ * @param mainRows      - Results from the main pagination query.
+ * @param relationQueries - The `relationQueries` array returned by
+ *                          `generatePaginationQuery`.
+ * @param relationResults - An array of result arrays, one per relation query,
+ *                          **in the same order** as `relationQueries`.
+ * @returns A new array of main rows with relation data attached.
+ *
+ * @example
+ * ```ts
+ * const assembled = assembleDrizzleRelations(mainRows, relationQueries, [postsRows]);
+ * // => [{ id: 1, name: 'Alice', posts: [{ id: 10, title: 'Hello' }] }, …]
+ * ```
+ */
+export function assembleDrizzleRelations(
+  mainRows: Record<string, unknown>[],
+  relationQueries: DrizzleRelationQuery<unknown>[],
+  relationResults: Record<string, unknown>[][],
+): Record<string, unknown>[] {
+  if (relationQueries.length !== relationResults.length) {
+    throw new Error(
+      `Mismatch: ${relationQueries.length} relation queries ` +
+        `but ${relationResults.length} result arrays`,
+    );
+  }
+
+  // Pre-index child rows by their foreign key value for O(1) lookup.
+  const indexedRelations = relationQueries.map((rq, i) => {
+    const childRows = relationResults[i] ?? [];
+    const grouped = new Map<unknown, Record<string, unknown>[]>();
+    const fkAliasList = collectAliases(rq.foreignKeyAlias);
+
+    for (const row of childRows) {
+      if (!isKeyValid(rq.foreignKeyAlias, row)) continue;
+      const fkValue = compositeKey(rq.foreignKeyAlias, row);
+
+      // Build a clean child row without the internal FK alias(es).
+      const cleanRow: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row)) {
+        if (!fkAliasList.includes(key)) {
+          cleanRow[key] = value;
+        }
+      }
+
+      const existing = grouped.get(fkValue);
+      if (existing) {
+        existing.push(cleanRow);
+      } else {
+        grouped.set(fkValue, [cleanRow]);
+      }
+    }
+
+    return { relationName: rq.relationName, grouped };
+  });
+
+  // Index by relation name for O(1) lookup per relation per row.
+  const indexedByName = new Map<string, Map<unknown, Record<string, unknown>[]>>();
+  for (const ir of indexedRelations) {
+    indexedByName.set(ir.relationName, ir.grouped);
+  }
+
+  // Collect internal parent-key alias names so we can omit them from output.
+  const pkAliasSet = new Set<string>();
+  for (const rq of relationQueries) {
+    // Rebuild the PK aliases to match what was injected into the select shape.
+    const parentKeys = toArray(rq.parentKey);
+    const pkAliases = collectAliases(buildPkAliases(rq.relationName, parentKeys));
+    for (const a of pkAliases) pkAliasSet.add(a);
+  }
+
+  return mainRows.map((row) => {
+    const result: Record<string, unknown> = {};
+
+    // Copy all original keys except internal parent-key aliases.
+    for (const [key, value] of Object.entries(row)) {
+      if (!pkAliasSet.has(key)) {
+        result[key] = value;
+      }
+    }
+
+    // Attach relation arrays.
+    for (const rq of relationQueries) {
+      const parentKeys = toArray(rq.parentKey);
+      const pkAliases = collectAliases(buildPkAliases(rq.relationName, parentKeys));
+      const pkRow: Record<string, unknown> = {};
+      for (const a of pkAliases) pkRow[a] = row[a];
+
+      const firstPkAlias = pkAliases[0];
+      if (firstPkAlias === undefined || !isKeyValid(firstPkAlias, pkRow)) {
+        result[rq.relationName] = [];
+        continue;
+      }
+
+      // Build the lookup key using the same compositeKey approach on PK aliases.
+      const fkAliases = rq.foreignKeyAlias;
+      let lookupKey: unknown;
+      if (typeof fkAliases === 'string') {
+        // Single FK — use the single PK value directly.
+        const singlePkAlias = pkAliases[0];
+        lookupKey = singlePkAlias !== undefined ? row[singlePkAlias] : undefined;
+      } else {
+        // Composite FK — JSON-serialize the tuple of PK values.
+        lookupKey = JSON.stringify(pkAliases.map((a) => row[a]));
+      }
+
+      const grouped = indexedByName.get(rq.relationName);
+      result[rq.relationName] = grouped?.get(lookupKey) ?? [];
+    }
+
+    return result;
+  });
+}
+
+// ─── Response metadata helpers ──────────────────────────────────────────────
+
+/**
+ * Builds the `pagination` metadata for a `LIMIT_OFFSET` response.
+ *
+ * Requires `totalItems` (from a `COUNT(*)` query) and the original parsed
+ * pagination params. Returns all the fields expected by
+ * `LimitOffsetPaginationResponseMeta`.
+ *
+ * @example
+ * ```ts
+ * const totalItems = await db.select({ count: sql`count(*)` }).from(usersTable);
+ * const meta = buildLimitOffsetResponseMeta(parsed, totalItems[0].count);
+ * // => { itemsPerPage: 10, totalItems: 42, currentPage: 2, totalPages: 5 }
+ * ```
+ */
+export function buildLimitOffsetResponseMeta<TSchema extends DataSchema>(
+  parsed: PaginationQueryParams<TSchema, 'LIMIT_OFFSET'>,
+  totalItems: number,
+): LimitOffsetPaginationResponseMeta {
+  const pagination = parsed.pagination;
+  const safePage = typeof pagination.page === 'number' && pagination.page > 0 ? pagination.page : 1;
+  const totalPages = pagination.limit > 0 ? Math.ceil(totalItems / pagination.limit) : 0;
+
+  return {
+    itemsPerPage: pagination.limit,
+    totalItems,
+    currentPage: safePage,
+    totalPages,
+    sortBy: pagination.sortBy?.map((s) => ({
+      property: `${s.property}`,
+      direction: s.direction,
+    })),
+    filter: pagination.filters,
+  };
+}
+
+/**
+ * Builds the `pagination` metadata for a `CURSOR` response.
+ *
+ * Extracts the cursor value from the last row of the result set so the client
+ * can request the next page. If there are no rows, the incoming cursor is
+ * returned as-is (or `0` as a fallback).
+ *
+ * @param parsed     - The parsed cursor-pagination params.
+ * @param rows       - The rows returned by the main paginated query.
+ * @param cursorField - The key in each row that holds the cursor value.
+ *                      Defaults to `selectAlias(cursorProperty)` (or
+ *                      `defaultSelectAlias` when no `selectAlias` is given).
+ * @param selectAlias - Alias builder matching the one used to build the query.
+ *                      When omitted, `defaultSelectAlias` is used.
+ *
+ * @example
+ * ```ts
+ * const meta = buildCursorResponseMeta(parsed, rows, 'id');
+ * // => { itemsPerPage: 10, cursor: 42 }
+ * ```
+ */
+export function buildCursorResponseMeta<TSchema extends DataSchema>(
+  parsed: PaginationQueryParams<TSchema, 'CURSOR'>,
+  rows: Record<string, unknown>[],
+  cursorField?: string,
+  selectAlias?: (fieldPath: string) => string,
+): CursorPaginationResponseMeta {
+  const pagination = parsed.pagination;
+  const aliasBuilder = selectAlias ?? defaultSelectAlias;
+  const resolvedCursorField = cursorField ?? aliasBuilder(`${pagination.cursorProperty}`);
+
+  let nextCursor: number | string | Date;
+
+  const lastRow = rows.length > 0 ? rows[rows.length - 1] : undefined;
+  if (lastRow) {
+    const rawValue = lastRow[resolvedCursorField];
+    if (rawValue instanceof Date) {
+      nextCursor = rawValue;
+    } else if (typeof rawValue === 'number' || typeof rawValue === 'string') {
+      nextCursor = rawValue;
+    } else {
+      // Fallback: use incoming cursor or 0.
+      nextCursor = pagination.cursor ?? 0;
+    }
+  } else {
+    nextCursor = pagination.cursor ?? 0;
+  }
+
+  return {
+    itemsPerPage: pagination.limit,
+    cursor: nextCursor,
+    sortBy: pagination.sortBy?.map((s) => ({
+      property: `${s.property}`,
+      direction: s.direction,
+    })),
+    filter: pagination.filters,
+  };
 }
