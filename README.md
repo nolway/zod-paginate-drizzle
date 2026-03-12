@@ -12,6 +12,8 @@ This library is **not standalone** — it requires [`zod-paginate`](https://gith
 - Handles field mapping with strict or permissive mode
 - Supports generated `select` aliases with collision handling
 - Includes reusable operator sets for PG and MySQL
+- **Relations**: fetch related data (one-to-many) as separate queries and assemble them into parent rows
+- **Type-safe pagination metadata**: return type is narrowed to `LimitOffsetPaginationResponseMeta` or `CursorPaginationResponseMeta` based on the parsed pagination type
 
 ## Installation
 
@@ -27,17 +29,19 @@ You will also need:
 
 ## Quick start
 
+### Paginated query with `generatePaginationQuery`
+
 ```ts
-import { applyDrizzlePaginationOnQuery } from 'zod-paginate-drizzle';
+import { generatePaginationQuery, defineRelation } from 'zod-paginate-drizzle';
 
 // `parsed` is the validated output from zod-paginate
 const parsed = {
   pagination: {
     type: 'LIMIT_OFFSET',
-    page: 2,
+    page: 1,
     limit: 20,
-    select: ['id', 'email', 'status'],
-    sortBy: [{ property: 'createdAt', direction: 'DESC' }],
+    select: ['id', 'name', 'posts.id', 'posts.title'],
+    sortBy: [{ property: 'id', direction: 'ASC' }],
     filters: {
       type: 'filter',
       field: 'status',
@@ -46,23 +50,95 @@ const parsed = {
   },
 };
 
-const fields = {
-  id: users.id,
-  email: users.email,
-  status: users.status,
-  createdAt: users.createdAt,
-};
-
-const { query, clauses } = applyDrizzlePaginationOnQuery(parsed, {
+const result = generatePaginationQuery(parsed, {
   dialect: 'pg',
-  fields,
   buildQuery: (select) => db.select(select).from(users),
+  fields: { id: users.id, name: users.name, status: users.status },
+  relations: [
+    defineRelation({
+      relationName: 'posts',
+      fields: { id: posts.id, title: posts.title },
+      foreignKey: posts.authorId,
+      parentKey: users.id,
+      buildQuery: (select) => db.select(select).from(posts),
+    }),
+  ],
 });
 
-// `query` is a real Drizzle query — just await it
-const rows = await query;
+// execute() runs the main query + all relation queries, assembles the result,
+// and computes pagination metadata automatically
+const { data, pagination } = await result.execute();
 
-// `clauses.select` is always a Record<string, Column> (never undefined)
+// data[0].posts is an array of { id, title }
+// pagination is typed as LimitOffsetPaginationResponseMeta
+// (narrowed from the 'LIMIT_OFFSET' type passed in parsed)
+```
+
+### Select-only query with `generateSelectQuery`
+
+When you only need to select fields (no filters, sorting, or pagination), use `generateSelectQuery` with `SelectQueryParams` from `zod-paginate`:
+
+```ts
+import { generateSelectQuery, defineRelation } from 'zod-paginate-drizzle';
+
+const parsed = {
+  select: ['id', 'name', 'posts.title'],
+};
+
+const result = generateSelectQuery(parsed, {
+  buildQuery: (select) => db.select(select).from(users),
+  fields: { id: users.id, name: users.name },
+  relations: [
+    defineRelation({
+      relationName: 'posts',
+      fields: { title: posts.title },
+      foreignKey: posts.authorId,
+      parentKey: users.id,
+      buildQuery: (select) => db.select(select).from(posts),
+    }),
+  ],
+});
+
+const { data } = await result.execute();
+// data[0].posts is an array of { title }
+```
+
+### Without relations
+
+Both functions work without relations — just pass an empty array:
+
+```ts
+const result = generatePaginationQuery(parsed, {
+  dialect: 'pg',
+  buildQuery: (select) => db.select(select).from(users),
+  fields: { id: users.id, name: users.name, email: users.email },
+  relations: [],
+});
+
+const { data, pagination } = await result.execute();
+```
+
+### Manual execution
+
+If you need more control, you can use the lower-level properties instead of `execute()`:
+
+```ts
+const result = generatePaginationQuery(parsed, config);
+
+// Execute queries yourself
+const [mainRows, ...relationRows] = await Promise.all([
+  result.query,
+  ...result.relationQueries.map((r) => r.query),
+]);
+
+// Assemble relations manually
+const data = result.assemble(mainRows, relationRows);
+
+// Access raw clauses
+result.clauses.where;   // SQL | undefined
+result.clauses.orderBy; // SQL[]
+result.clauses.limit;   // number | undefined
+result.clauses.offset;  // number | undefined
 ```
 
 ## Working with joins
@@ -72,13 +148,11 @@ your query (including joins) naturally:
 
 ```ts
 const fields = {
-  id: users.id,
-  email: users.email,
+  userName: users.name,
   postTitle: posts.title,
-  postCreatedAt: posts.createdAt,
 };
 
-const { query } = applyDrizzlePaginationOnQuery(parsed, {
+const result = generatePaginationQuery(parsed, {
   dialect: 'pg',
   fields,
   buildQuery: (select) =>
@@ -86,32 +160,128 @@ const { query } = applyDrizzlePaginationOnQuery(parsed, {
       .select(select)
       .from(users)
       .leftJoin(posts, eq(users.id, posts.authorId)),
+  relations: [],
 });
 
-const rows = await query;
+const { data } = await result.execute();
 ```
 
 ## API
 
-### `applyDrizzlePaginationOnQuery(parsed, config)`
+### `generatePaginationQuery(parsed, config)`
 
-Builds the select shape and applies `where`, `orderBy`, `limit` and `offset` clauses.
+Main entry point. Builds a paginated query with optional relations. Returns a `DrizzlePaginationResult` object.
 
-Returns:
+The return type is **narrowed based on the pagination type** in `parsed`:
 
-- `query`: a real Drizzle query (awaitable) returned by `buildQuery`, with clauses applied
-- `clauses`: generated clauses:
-  - `select`: `Record<string, Column>` (always defined, `{}` when empty)
-  - `where`, `orderBy`, `limit`, `offset`
+```ts
+// When parsed has type: 'LIMIT_OFFSET'
+const result = generatePaginationQuery(parsed, config);
+const { pagination } = await result.execute();
+// pagination: LimitOffsetPaginationResponseMeta
+//   → { totalItems, totalPages, currentPage, itemsPerPage }
 
-Config:
+// When parsed has type: 'CURSOR'
+const result = generatePaginationQuery(parsed, config);
+const { pagination } = await result.execute();
+// pagination: CursorPaginationResponseMeta
+//   → { nextCursor, previousCursor, hasMore }
+```
 
-- `dialect`: `'pg' | 'mysql'`
-- `buildQuery`: `(selectShape) => query` — receives the generated select shape, returns a Drizzle query builder. The adapter calls `.$dynamic()` internally
-- `fields`: map from allowed field paths to Drizzle columns
-- `strictFieldMapping` (default `true`): throw when a field has no mapping
-- `selectAlias`: custom alias generator (default: `a.b` -> `a_b`)
-- `operators`: custom operator set (optional)
+**Config** (`GeneratePaginationQueryConfig`):
+
+| Option | Type | Description |
+|---|---|---|
+| `dialect` | `'pg' \| 'mysql'` | Database dialect |
+| `buildQuery` | `(selectShape) => query` | Receives the generated select shape, returns a Drizzle query builder |
+| `fields` | `Record<string, Column>` | Map from allowed field paths to Drizzle columns |
+| `relations` | `DrizzleRelation[]` | Array of relations created with `defineRelation()` |
+| `strictFieldMapping` | `boolean` (default `true`) | Throw when a requested field has no mapping |
+| `selectAlias` | `(fieldPath: string) => string` | Custom alias generator (default: `a.b` → `a_b`) |
+| `operators` | `DrizzleSqlOperatorSet` | Custom operator set (optional) |
+
+**Returns** (`DrizzlePaginationResult`):
+
+| Property | Type | Description |
+|---|---|---|
+| `query` | `DrizzleDynamicQuery` | The main Drizzle query (awaitable) with all clauses applied |
+| `clauses` | `DrizzlePaginationClauses` | Generated clauses (`select`, `where`, `orderBy`, `limit`, `offset`) |
+| `relationQueries` | `DrizzleRelationQuery[]` | Prepared relation queries (for manual execution) |
+| `assemble` | `(mainRows, relationResults) => rows` | Manual row assembler |
+| `execute` | `() => Promise<{ data, pagination }>` | Runs everything and returns assembled data + pagination metadata |
+
+### `generateSelectQuery(parsed, config)`
+
+Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryParams` from `zod-paginate` (only a `select` array — no filters, sorting, or pagination).
+
+**Config**:
+
+| Option | Type | Description |
+|---|---|---|
+| `buildQuery` | `(selectShape) => query` | Receives the generated select shape, returns a Drizzle query builder |
+| `fields` | `Record<string, Column>` | Map from allowed field paths to Drizzle columns |
+| `relations` | `DrizzleRelation[]` | Array of relations created with `defineRelation()` |
+| `strictFieldMapping` | `boolean` (default `true`) | Throw when a requested field has no mapping |
+| `selectAlias` | `(fieldPath: string) => string` | Custom alias generator (default: `a.b` → `a_b`) |
+
+**Returns** (`DrizzleSelectWithRelationsResult`):
+
+| Property | Type | Description |
+|---|---|---|
+| `query` | `DrizzleDynamicQuery` | The main Drizzle query (awaitable) |
+| `relationQueries` | `DrizzleRelationQuery[]` | Prepared relation queries |
+| `assemble` | `(mainRows, relationResults) => rows` | Manual row assembler |
+| `execute` | `() => Promise<{ data }>` | Runs everything and returns assembled data |
+
+### `defineRelation(config)`
+
+Type-safe factory for creating relation definitions. Each relation describes a one-to-many (or one-to-one) relationship fetched as a separate query and assembled into parent rows.
+
+```ts
+const postsRelation = defineRelation({
+  relationName: 'posts',        // key in the assembled result
+  fields: {                     // column map for the child table
+    id: posts.id,
+    title: posts.title,
+  },
+  foreignKey: posts.authorId,   // child FK column(s)
+  parentKey: users.id,          // parent PK column(s)
+  buildQuery: (select) =>       // factory for child query
+    db.select(select).from(posts),
+});
+```
+
+Composite foreign keys are supported using arrays:
+
+```ts
+defineRelation({
+  relationName: 'items',
+  fields: { id: items.id },
+  foreignKey: [items.orderId, items.tenantId],
+  parentKey: [orders.id, orders.tenantId],
+  buildQuery: (select) => db.select(select).from(items),
+});
+```
+
+### `buildLimitOffsetResponseMeta(parsed, totalItems)`
+
+Computes limit/offset pagination metadata from parsed params and total count.
+
+Returns `LimitOffsetPaginationResponseMeta`:
+
+```ts
+{ totalItems, totalPages, currentPage, itemsPerPage }
+```
+
+### `buildCursorResponseMeta(parsed, rows, cursorField?)`
+
+Computes cursor pagination metadata from parsed params and result rows.
+
+Returns `CursorPaginationResponseMeta`:
+
+```ts
+{ nextCursor, previousCursor, hasMore }
+```
 
 ### `createPgDrizzleOperators()`
 
@@ -127,18 +297,21 @@ Returns default MySQL operators for Drizzle.
 
 ## Supported filter operators
 
-- `$null`
-- `$eq`
-- `$in`
-- `$contains` (PG by default; custom for MySQL if needed)
-- `$gt`
-- `$gte`
-- `$lt`
-- `$lte`
-- `$btw`
-- `$ilike`
-- `$sw`
-- `not` modifier on each condition
+| Operator | Description |
+|---|---|
+| `$null` | Is null / is not null |
+| `$eq` | Equals |
+| `$in` | In array |
+| `$contains` | Array contains (PG by default; custom for MySQL if needed) |
+| `$gt` | Greater than |
+| `$gte` | Greater than or equal |
+| `$lt` | Less than |
+| `$lte` | Less than or equal |
+| `$btw` | Between (inclusive) |
+| `$ilike` | Case-insensitive like |
+| `$sw` | Starts with |
+
+All operators support the `not` modifier for negation.
 
 ## Important notes
 
