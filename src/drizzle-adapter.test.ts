@@ -678,7 +678,7 @@ describe('applyDrizzlePaginationOnQuery', () => {
   });
 });
 
-describe('applyDrizzlePaginationWithRelations', () => {
+describe('generatePaginationQuery', () => {
   it('builds a main query and separate relation queries', () => {
     const mainQuery = new QuerySpy();
     const relationQuery = new QuerySpy();
@@ -1073,7 +1073,7 @@ describe('applyDrizzlePaginationWithRelations', () => {
   });
 });
 
-describe('applyDrizzleSelectWithRelations', () => {
+describe('generateSelectQuery', () => {
   function toSelectParsed(select: string[]): SelectQueryParams<DataSchema> {
     return { select };
   }

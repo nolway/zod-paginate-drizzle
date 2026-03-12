@@ -105,14 +105,13 @@ const { data } = await result.execute();
 
 ### Without relations
 
-Both functions work without relations — just pass an empty array:
+`relations` is optional — simply omit it:
 
 ```ts
 const result = generatePaginationQuery(parsed, {
   dialect: 'pg',
   buildQuery: (select) => db.select(select).from(users),
   fields: { id: users.id, name: users.name, email: users.email },
-  relations: [],
 });
 
 const { data, pagination } = await result.execute();
@@ -185,7 +184,7 @@ const { pagination } = await result.execute();
 const result = generatePaginationQuery(parsed, config);
 const { pagination } = await result.execute();
 // pagination: CursorPaginationResponseMeta
-//   → { nextCursor, previousCursor, hasMore }
+//   → { itemsPerPage, cursor, sortBy, filter }
 ```
 
 **Config** (`GeneratePaginationQueryConfig`):
@@ -195,7 +194,7 @@ const { pagination } = await result.execute();
 | `dialect` | `'pg' \| 'mysql'` | Database dialect |
 | `buildQuery` | `(selectShape) => query` | Receives the generated select shape, returns a Drizzle query builder |
 | `fields` | `Record<string, Column>` | Map from allowed field paths to Drizzle columns |
-| `relations` | `DrizzleRelation[]` | Array of relations created with `defineRelation()` |
+| `relations` | `DrizzleRelation[]` (optional) | Array of relations created with `defineRelation()` |
 | `strictFieldMapping` | `boolean` (default `true`) | Throw when a requested field has no mapping |
 | `selectAlias` | `(fieldPath: string) => string` | Custom alias generator (default: `a.b` → `a_b`) |
 | `operators` | `DrizzleSqlOperatorSet` | Custom operator set (optional) |
@@ -220,7 +219,7 @@ Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPar
 |---|---|---|
 | `buildQuery` | `(selectShape) => query` | Receives the generated select shape, returns a Drizzle query builder |
 | `fields` | `Record<string, Column>` | Map from allowed field paths to Drizzle columns |
-| `relations` | `DrizzleRelation[]` | Array of relations created with `defineRelation()` |
+| `relations` | `DrizzleRelation[]` (optional) | Array of relations created with `defineRelation()` |
 | `strictFieldMapping` | `boolean` (default `true`) | Throw when a requested field has no mapping |
 | `selectAlias` | `(fieldPath: string) => string` | Custom alias generator (default: `a.b` → `a_b`) |
 
@@ -280,7 +279,7 @@ Computes cursor pagination metadata from parsed params and result rows.
 Returns `CursorPaginationResponseMeta`:
 
 ```ts
-{ nextCursor, previousCursor, hasMore }
+{ itemsPerPage, cursor, sortBy, filter }
 ```
 
 ### `createPgDrizzleOperators()`

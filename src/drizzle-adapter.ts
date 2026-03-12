@@ -161,7 +161,9 @@ export function defineRelation<
   buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
 }): AnyDrizzleRelation & { relationName: TName; fields: TRelFields } {
   // The input is structurally compatible — AnyDrizzleRelation.buildQuery uses
-  // `never` param (method bivariance) which is assignable from any concrete shape.
+  // method syntax, so TypeScript's parameter bivariance allows assigning a
+  // concrete `DrizzleSelectShape<TFieldColumn>` callback to the wider
+  // `DrizzleSelectShape<DrizzleSqlColumn>` signature.
   const result: AnyDrizzleRelation & { relationName: TName; fields: TRelFields } = relation;
   return result;
 }
@@ -213,7 +215,7 @@ export interface DrizzleRelationQuery<TColumn> {
 }
 
 /**
- * Extended result of `applyDrizzlePaginationWithRelations`.
+ * Extended result of `generatePaginationQuery`.
  *
  * Provides both low-level access (`query`, `clauses`, `relationQueries`,
  * `assemble`) **and** a high-level `execute()` that runs every query,
@@ -267,7 +269,7 @@ export interface DrizzlePaginationExecuteResult<
 }
 
 /**
- * Result of `applyDrizzleSelectWithRelations`.
+ * Result of `generateSelectQuery`.
  *
  * Lighter variant of `DrizzlePaginationResult` — no pagination
  * clauses. Includes `assemble` and `execute` helpers.
@@ -1048,7 +1050,7 @@ export interface GeneratePaginationQueryConfig<
  *
  * @example
  * ```ts
- * const result = applyDrizzlePaginationWithRelations(parsed, {
+ * const result = generatePaginationQuery(parsed, {
  *   dialect: 'pg',
  *   buildQuery: (select) => db.select(select).from(usersTable),
  *   fields: { id: usersTable.id, name: usersTable.name },
@@ -1234,7 +1236,12 @@ export function generatePaginationQuery<
     }
 
     // CURSOR
-    const paginationMeta = buildCursorResponseMeta({ pagination: parsed.pagination }, mainRows);
+    const paginationMeta = buildCursorResponseMeta(
+      { pagination: parsed.pagination },
+      mainRows,
+      undefined,
+      aliasBuilder,
+    );
     return { data, pagination: paginationMeta };
   };
 
@@ -1243,7 +1250,7 @@ export function generatePaginationQuery<
 
 /**
  * Applies Drizzle select **with relation support** — the select-only counterpart
- * of `applyDrizzlePaginationWithRelations`.
+ * of `generatePaginationQuery`.
  *
  * Works with `SelectQueryParams` (returned by `select()` from `zod-paginate`)
  * instead of the full `PaginationQueryParams`. Since `select()` only produces a
@@ -1258,7 +1265,7 @@ export function generatePaginationQuery<
  *
  * @example
  * ```ts
- * const result = applyDrizzleSelectWithRelations(parsed, {
+ * const result = generateSelectQuery(parsed, {
  *   buildQuery: (select) => db.select(select).from(usersTable),
  *   fields: { id: usersTable.id, name: usersTable.name },
  *   relations: [
@@ -1431,7 +1438,7 @@ function coerceAssembledRows<TRow extends Record<string, unknown>>(
  *
  * @param mainRows      - Results from the main pagination query.
  * @param relationQueries - The `relationQueries` array returned by
- *                          `applyDrizzlePaginationWithRelations`.
+ *                          `generatePaginationQuery`.
  * @param relationResults - An array of result arrays, one per relation query,
  *                          **in the same order** as `relationQueries`.
  * @returns A new array of main rows with relation data attached.
@@ -1483,6 +1490,12 @@ export function assembleDrizzleRelations(
     return { relationName: rq.relationName, grouped };
   });
 
+  // Index by relation name for O(1) lookup per relation per row.
+  const indexedByName = new Map<string, Map<unknown, Record<string, unknown>[]>>();
+  for (const ir of indexedRelations) {
+    indexedByName.set(ir.relationName, ir.grouped);
+  }
+
   // Collect internal parent-key alias names so we can omit them from output.
   const pkAliasSet = new Set<string>();
   for (const rq of relationQueries) {
@@ -1527,12 +1540,8 @@ export function assembleDrizzleRelations(
         lookupKey = JSON.stringify(pkAliases.map((a) => row[a]));
       }
 
-      const indexed = indexedRelations.find((ir) => ir.relationName === rq.relationName);
-      if (indexed) {
-        result[rq.relationName] = indexed.grouped.get(lookupKey) ?? [];
-      } else {
-        result[rq.relationName] = [];
-      }
+      const grouped = indexedByName.get(rq.relationName);
+      result[rq.relationName] = grouped?.get(lookupKey) ?? [];
     }
 
     return result;
@@ -1586,8 +1595,10 @@ export function buildLimitOffsetResponseMeta<TSchema extends DataSchema>(
  * @param parsed     - The parsed cursor-pagination params.
  * @param rows       - The rows returned by the main paginated query.
  * @param cursorField - The key in each row that holds the cursor value.
- *                      Defaults to the alias that `selectAlias` would produce
- *                      for the `cursorProperty` (i.e. `defaultSelectAlias` by default).
+ *                      Defaults to `selectAlias(cursorProperty)` (or
+ *                      `defaultSelectAlias` when no `selectAlias` is given).
+ * @param selectAlias - Alias builder matching the one used to build the query.
+ *                      When omitted, `defaultSelectAlias` is used.
  *
  * @example
  * ```ts
@@ -1599,9 +1610,11 @@ export function buildCursorResponseMeta<TSchema extends DataSchema>(
   parsed: PaginationQueryParams<TSchema, 'CURSOR'>,
   rows: Record<string, unknown>[],
   cursorField?: string,
+  selectAlias?: (fieldPath: string) => string,
 ): CursorPaginationResponseMeta {
   const pagination = parsed.pagination;
-  const resolvedCursorField = cursorField ?? defaultSelectAlias(`${pagination.cursorProperty}`);
+  const aliasBuilder = selectAlias ?? defaultSelectAlias;
+  const resolvedCursorField = cursorField ?? aliasBuilder(`${pagination.cursorProperty}`);
 
   let nextCursor: number | string | Date;
 
