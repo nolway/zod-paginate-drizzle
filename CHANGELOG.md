@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v1.0.1...v2.0.0) (2026-03-12)
+
+
+### Features
+
+* add relation handling ([323422d](https://github.com/nolway/zod-paginate-drizzle/commit/323422daabd749989ac5ab7000204f17c762d882))
+
+
+### Miscellaneous Chores
+
+* release 2.0.0 ([3fe500e](https://github.com/nolway/zod-paginate-drizzle/commit/3fe500e69d89afd7c8282e3a166d0efab0e5f57f))
+
 ## [1.0.1](https://github.com/nolway/zod-paginate-drizzle/compare/v1.0.1...v1.0.1) (2026-03-05)
 
 
