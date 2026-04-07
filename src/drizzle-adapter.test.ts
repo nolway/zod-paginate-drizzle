@@ -1353,6 +1353,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'posts',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1383,6 +1384,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'posts',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1402,6 +1404,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'posts',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1428,6 +1431,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'posts',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1449,6 +1453,7 @@ describe('assembleDrizzleRelations', () => {
             relationName: 'posts',
             parentKey: users.id,
             foreignKeyAlias: '__fk',
+            mode: 'many' as const,
             query: new QuerySpy(),
           },
         ],
@@ -1465,12 +1470,14 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'posts',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
       {
         relationName: 'comments',
         parentKey: users.id,
         foreignKeyAlias: '__fk',
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1502,6 +1509,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'items',
         parentKey: [users.id, users.name], // stand-in columns for test
         foreignKeyAlias: ['__fk_0', '__fk_1'],
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1536,6 +1544,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'items',
         parentKey: [users.id, users.name],
         foreignKeyAlias: ['__fk_0', '__fk_1'],
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1554,6 +1563,7 @@ describe('assembleDrizzleRelations', () => {
         relationName: 'items',
         parentKey: [users.id, users.name],
         foreignKeyAlias: ['__fk_0', '__fk_1'],
+        mode: 'many' as const,
         query: new QuerySpy(),
       },
     ];
@@ -1566,6 +1576,111 @@ describe('assembleDrizzleRelations', () => {
     expect(firstItem).toEqual({ qty: 10, price: 50 });
     expect(firstItem).not.toHaveProperty('__fk_0');
     expect(firstItem).not.toHaveProperty('__fk_1');
+  });
+
+  it('returns single object for mode "one" when child exists', () => {
+    const mainRows = [
+      { __pk_profile: 1, name: 'Alice' },
+      { __pk_profile: 2, name: 'Bob' },
+    ];
+
+    const relationQueries = [
+      {
+        relationName: 'profile',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'one' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const relationResults = [[{ __fk: 1, bio: 'Hello' }]];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
+
+    expect(assembled[0]?.profile).toEqual({ bio: 'Hello' });
+    expect(assembled[1]?.profile).toBeNull();
+  });
+
+  it('returns null for mode "one" when no child matches', () => {
+    const mainRows = [{ __pk_profile: 1, name: 'Alice' }];
+
+    const relationQueries = [
+      {
+        relationName: 'profile',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'one' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, [[]]);
+
+    expect(assembled[0]?.profile).toBeNull();
+  });
+
+  it('returns null for mode "one" when parent key is invalid', () => {
+    const mainRows = [{ name: 'Alice' }];
+
+    const relationQueries = [
+      {
+        relationName: 'profile',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'one' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, [[]]);
+
+    expect(assembled[0]?.profile).toBeNull();
+  });
+
+  it('returns first child only for mode "one" when multiple children exist', () => {
+    const mainRows = [{ __pk_profile: 1, name: 'Alice' }];
+
+    const relationQueries = [
+      {
+        relationName: 'profile',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'one' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const relationResults = [
+      [
+        { __fk: 1, bio: 'First' },
+        { __fk: 1, bio: 'Second' },
+      ],
+    ];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
+
+    expect(assembled[0]?.profile).toEqual({ bio: 'First' });
+  });
+
+  it('defaults to mode "many" when mode is not specified', () => {
+    const mainRows = [{ __pk_posts: 1, name: 'Alice' }];
+
+    const relationQueries = [
+      {
+        relationName: 'posts',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'many' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const relationResults = [[{ __fk: 1, title: 'Post A' }]];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
+
+    expect(assembled[0]?.posts).toEqual([{ title: 'Post A' }]);
   });
 });
 

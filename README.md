@@ -250,6 +250,26 @@ const postsRelation = defineRelation({
 });
 ```
 
+#### One-to-one relations (`mode: 'one'`)
+
+By default, relations are assembled as arrays (`mode: 'many'`). For one-to-one relations, set `mode: 'one'` to get a single object or `null` instead:
+
+```ts
+const profileRelation = defineRelation({
+  relationName: 'profile',
+  fields: { bio: profiles.bio, avatar: profiles.avatar },
+  foreignKey: profiles.userId,
+  parentKey: users.id,
+  mode: 'one',                  // ← single object | null
+  buildQuery: (select) => db.select(select).from(profiles),
+});
+
+const { data } = await result.execute();
+// data[0].profile is { bio, avatar } | null  (not an array)
+```
+
+The return type is narrowed at the type level: `mode: 'one'` produces `T | null`, `mode: 'many'` (default) produces `T[]`.
+
 Composite foreign keys are supported using arrays:
 
 ```ts

@@ -33,6 +33,12 @@ import type {
 // ─── Relation types ─────────────────────────────────────────────────────────
 
 /**
+ * Controls whether an assembled relation produces an **array** (`'many'`)
+ * or a **single object \| null** (`'one'`).
+ */
+export type RelationMode = 'many' | 'one';
+
+/**
  * Describes a one-to-many (or one-to-one) relation that must be fetched
  * as a separate query and assembled back into the parent rows.
  *
@@ -61,6 +67,7 @@ export interface DrizzleRelation<
   TColumn,
   TName extends string = string,
   TRelFields extends Record<string, TColumn> = Record<string, TColumn>,
+  TMode extends RelationMode = 'many',
 > {
   /** Name used as the key in the assembled result (e.g. `"posts"`). */
   relationName: TName;
@@ -76,6 +83,12 @@ export interface DrizzleRelation<
    * Must have the same length as `foreignKey` when using arrays.
    */
   parentKey: TColumn | TColumn[];
+  /**
+   * Controls how the assembled result is shaped:
+   * - `'many'` (default): attaches an **array** of child rows.
+   * - `'one'`: attaches a **single object or `null`** (first match).
+   */
+  mode?: TMode;
   /**
    * Factory that builds the base query for this relation.
    * Receives the computed select shape (column subset) and must return
@@ -122,6 +135,7 @@ export interface AnyDrizzleRelation {
   fields: Record<string, DrizzleSqlColumn>;
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  mode?: RelationMode;
   buildQuery(selectShape: DrizzleSelectShape<DrizzleSqlColumn>): DrizzleAutoQuery;
 }
 
@@ -158,20 +172,61 @@ export function defineRelation<
   fields: TRelFields & Record<string, TFieldColumn>;
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  mode: 'one';
   buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
-}): AnyDrizzleRelation & { relationName: TName; fields: TRelFields } {
+}): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: 'one' };
+
+export function defineRelation<
+  TFieldColumn extends DrizzleSqlColumn,
+  const TName extends string,
+  TRelFields extends Record<string, TFieldColumn>,
+>(relation: {
+  relationName: TName;
+  fields: TRelFields & Record<string, TFieldColumn>;
+  foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  mode?: 'many';
+  buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
+}): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: 'many' };
+
+export function defineRelation<
+  TFieldColumn extends DrizzleSqlColumn,
+  const TName extends string,
+  TRelFields extends Record<string, TFieldColumn>,
+>(relation: {
+  relationName: TName;
+  fields: TRelFields & Record<string, TFieldColumn>;
+  foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  mode?: RelationMode;
+  buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
+}): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: RelationMode } {
   // The input is structurally compatible — AnyDrizzleRelation.buildQuery uses
   // method syntax, so TypeScript's parameter bivariance allows assigning a
   // concrete `DrizzleSelectShape<TFieldColumn>` callback to the wider
   // `DrizzleSelectShape<DrizzleSqlColumn>` signature.
-  const result: AnyDrizzleRelation & { relationName: TName; fields: TRelFields } = relation;
+  const result: AnyDrizzleRelation & {
+    relationName: TName;
+    fields: TRelFields;
+    mode: RelationMode;
+  } = { ...relation, mode: relation.mode ?? 'many' };
   return result;
 }
 
 /**
+ * Extracts the `mode` from a `DrizzleRelation`.
+ * Defaults to `'many'` when not specified.
+ */
+export type InferRelationMode<TRel> = TRel extends { mode: infer TMode extends RelationMode }
+  ? TMode
+  : 'many';
+
+/**
  * Given a **tuple** of `DrizzleRelation` entries, builds the intersection
- * type `{ name1: Row1[]; name2: Row2[]; … }` so the assembled result is
+ * type `{ name1: Row1[]; name2: Row2 | null; … }` so the assembled result is
  * fully typed.
+ *
+ * Relations with `mode: 'one'` produce `Row | null`; all others produce `Row[]`.
  *
  * @example
  * ```ts
@@ -182,7 +237,12 @@ export function defineRelation<
  */
 export type InferRelationsData<TRelations extends readonly AnyDrizzleRelation[]> =
   TRelations extends readonly [infer TFirst, ...infer TRest]
-    ? Record<InferRelationName<TFirst>, InferRelationRow<TFirst>[]> &
+    ? Record<
+        InferRelationName<TFirst>,
+        InferRelationMode<TFirst> extends 'one'
+          ? InferRelationRow<TFirst> | null
+          : InferRelationRow<TFirst>[]
+      > &
         (TRest extends readonly AnyDrizzleRelation[] ? InferRelationsData<TRest> : unknown)
     : unknown;
 
@@ -210,6 +270,8 @@ export interface DrizzleRelationQuery<TColumn> {
   parentKey: TColumn | TColumn[];
   /** The alias(es) used for the foreign key(s) in the child select shape. */
   foreignKeyAlias: string | string[];
+  /** Assembly mode: `'many'` → array, `'one'` → single object or null. */
+  mode: RelationMode;
   /** The ready-to-execute Drizzle dynamic query. */
   query: DrizzleDynamicQuery;
 }
@@ -1013,6 +1075,7 @@ function buildSingleRelationQuery(
     relationName: relation.relationName,
     parentKey: relation.parentKey,
     foreignKeyAlias: fkAliases,
+    mode: relation.mode ?? 'many',
     query,
   };
 }
@@ -1378,6 +1441,7 @@ export function generateSelectQuery<
       relationName: relation.relationName,
       parentKey: relation.parentKey,
       foreignKeyAlias: fkAliases,
+      mode: relation.mode ?? 'many',
       query: relationQuery,
     };
   });
@@ -1515,7 +1579,7 @@ export function assembleDrizzleRelations(
       }
     }
 
-    // Attach relation arrays.
+    // Attach relation data (array or single object depending on mode).
     for (const rq of relationQueries) {
       const parentKeys = toArray(rq.parentKey);
       const pkAliases = collectAliases(buildPkAliases(rq.relationName, parentKeys));
@@ -1524,7 +1588,7 @@ export function assembleDrizzleRelations(
 
       const firstPkAlias = pkAliases[0];
       if (firstPkAlias === undefined || !isKeyValid(firstPkAlias, pkRow)) {
-        result[rq.relationName] = [];
+        result[rq.relationName] = rq.mode === 'one' ? null : [];
         continue;
       }
 
@@ -1541,7 +1605,8 @@ export function assembleDrizzleRelations(
       }
 
       const grouped = indexedByName.get(rq.relationName);
-      result[rq.relationName] = grouped?.get(lookupKey) ?? [];
+      const children = grouped?.get(lookupKey) ?? [];
+      result[rq.relationName] = rq.mode === 'one' ? (children[0] ?? null) : children;
     }
 
     return result;
