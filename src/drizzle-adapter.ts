@@ -90,6 +90,35 @@ export interface DrizzleRelation<
    */
   mode?: TMode;
   /**
+   * Static ordering applied to the relation query.
+   *
+   * When the client also requests sorting via query params (e.g.
+   * `sortBy=posts.createdAt`), the client sort takes priority and
+   * this static order acts as a tiebreaker.
+   *
+   * @example
+   * ```ts
+   * orderBy: [desc(posts.createdAt)]
+   * ```
+   */
+  orderBy?: SQL[];
+  /**
+   * Maximum number of child rows **per parent** to keep after assembly.
+   *
+   * All matching children are still fetched from the database; the
+   * limit is applied in-memory during `assembleDrizzleRelations`.
+   * Combined with `orderBy`, this lets you express "last N items".
+   *
+   * Ignored when `mode` is `'one'` (already capped at 1).
+   *
+   * @example
+   * ```ts
+   * orderBy: [desc(posts.createdAt)],
+   * limit: 5,   // keep the 5 most recent posts per user
+   * ```
+   */
+  limit?: number;
+  /**
    * Factory that builds the base query for this relation.
    * Receives the computed select shape (column subset) and must return
    * a Drizzle auto-query (same contract as the main `buildQuery`).
@@ -136,6 +165,8 @@ export interface AnyDrizzleRelation {
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   mode?: RelationMode;
+  orderBy?: SQL[];
+  limit?: number;
   buildQuery(selectShape: DrizzleSelectShape<DrizzleSqlColumn>): DrizzleAutoQuery;
 }
 
@@ -173,6 +204,8 @@ export function defineRelation<
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   mode: 'one';
+  orderBy?: SQL[];
+  limit?: number;
   buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
 }): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: 'one' };
 
@@ -186,6 +219,8 @@ export function defineRelation<
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   mode?: 'many';
+  orderBy?: SQL[];
+  limit?: number;
   buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
 }): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: 'many' };
 
@@ -199,6 +234,8 @@ export function defineRelation<
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
   mode?: RelationMode;
+  orderBy?: SQL[];
+  limit?: number;
   buildQuery: (selectShape: DrizzleSelectShape<NoInfer<TFieldColumn>>) => DrizzleAutoQuery;
 }): AnyDrizzleRelation & { relationName: TName; fields: TRelFields; mode: RelationMode } {
   // The input is structurally compatible — AnyDrizzleRelation.buildQuery uses
@@ -272,6 +309,8 @@ export interface DrizzleRelationQuery<TColumn> {
   foreignKeyAlias: string | string[];
   /** Assembly mode: `'many'` → array, `'one'` → single object or null. */
   mode: RelationMode;
+  /** Max children per parent (applied during assembly). `undefined` = no limit. */
+  limit?: number;
   /** The ready-to-execute Drizzle dynamic query. */
   query: DrizzleDynamicQuery;
 }
@@ -1118,6 +1157,11 @@ function buildSingleRelationQuery(
     }
   }
 
+  // Append static relation orderBy as fallback / tiebreaker.
+  if (relation.orderBy && relation.orderBy.length > 0) {
+    relationOrderBy.push(...relation.orderBy);
+  }
+
   // ── Build query ─────────────────────────────────────────────────
   let query = relation.buildQuery(selectShape).$dynamic();
 
@@ -1133,13 +1177,13 @@ function buildSingleRelationQuery(
   if (relationOrderBy.length > 0) {
     query = query.orderBy(...relationOrderBy);
   }
-  // Note: no limit/offset on relation queries — we fetch all matching children.
 
   return {
     relationName: relation.relationName,
     parentKey: relation.parentKey,
     foreignKeyAlias: fkAliases,
     mode: relation.mode ?? 'many',
+    limit: relation.limit,
     query,
   };
 }
@@ -1190,11 +1234,17 @@ function buildSelectOnlyRelationQuery(
     relationQuery = relationQuery.where(parentScope);
   }
 
+  // Apply static relation orderBy.
+  if (relation.orderBy && relation.orderBy.length > 0) {
+    relationQuery = relationQuery.orderBy(...relation.orderBy);
+  }
+
   return {
     relationName: relation.relationName,
     parentKey: relation.parentKey,
     foreignKeyAlias: fkAliases,
     mode: relation.mode ?? 'many',
+    limit: relation.limit,
     query: relationQuery,
   };
 }
@@ -1732,7 +1782,13 @@ export function assembleDrizzleRelations(
       }
 
       const grouped = indexedByName.get(rq.relationName);
-      const children = grouped?.get(lookupKey) ?? [];
+      let children = grouped?.get(lookupKey) ?? [];
+
+      // Apply per-parent limit when configured.
+      if (rq.limit !== undefined && rq.limit > 0 && children.length > rq.limit) {
+        children = children.slice(0, rq.limit);
+      }
+
       result[rq.relationName] = rq.mode === 'one' ? (children[0] ?? null) : children;
     }
 

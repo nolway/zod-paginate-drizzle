@@ -270,6 +270,31 @@ const { data } = await result.execute();
 
 The return type is narrowed at the type level: `mode: 'one'` produces `T | null`, `mode: 'many'` (default) produces `T[]`.
 
+#### Per-relation `orderBy` and `limit`
+
+You can set a static `orderBy` and a per-parent `limit` directly on the relation definition. This is useful for "last N items" patterns:
+
+```ts
+import { desc } from 'drizzle-orm';
+
+const recentPostsRelation = defineRelation({
+  relationName: 'posts',
+  fields: { id: posts.id, title: posts.title, createdAt: posts.createdAt },
+  foreignKey: posts.authorId,
+  parentKey: users.id,
+  orderBy: [desc(posts.createdAt)],  // static sort (tiebreaker if client also sorts)
+  limit: 5,                          // keep the 5 most recent posts per user
+  buildQuery: (select) => db.select(select).from(posts),
+});
+
+const { data } = await result.execute();
+// data[0].posts has at most 5 items, ordered by createdAt DESC
+```
+
+- `orderBy` is applied at the SQL level. If the client also requests sorting for this relation via query params (e.g. `sortBy=posts.title`), the client sort takes priority and the static order acts as a tiebreaker.
+- `limit` is applied **per parent** during assembly (not at the SQL level). All matching children are fetched from the database; the limit caps how many are kept for each parent row.
+- `limit` is ignored when `mode` is `'one'` (already capped at 1).
+
 Composite foreign keys are supported using arrays:
 
 ```ts

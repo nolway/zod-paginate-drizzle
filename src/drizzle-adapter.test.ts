@@ -1,4 +1,4 @@
-import type { SQL } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { DataSchema, PaginationQueryParams, SelectQueryParams } from 'zod-paginate';
@@ -833,6 +833,96 @@ describe('generatePaginationQuery', () => {
     expect(relationQuery.orderByCalls[0]).toHaveLength(1);
   });
 
+  it('applies static relation orderBy on the relation query', () => {
+    const relationQuery = new QuerySpy();
+    const staticOrder = [sql`1`];
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+    });
+
+    generatePaginationQuery(parsed, {
+      dialect: 'pg',
+      buildQuery: (): QuerySpy => new QuerySpy(),
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          orderBy: staticOrder,
+          buildQuery: (): QuerySpy => relationQuery,
+        },
+      ],
+    });
+
+    expect(relationQuery.orderByCalls).toHaveLength(1);
+    expect(relationQuery.orderByCalls[0]).toEqual(staticOrder);
+  });
+
+  it('appends static relation orderBy after client-requested sort', () => {
+    const relationQuery = new QuerySpy();
+    const staticOrder = [sql`2`];
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+      sortBy: [{ property: 'posts.title', direction: 'ASC' }],
+    });
+
+    generatePaginationQuery(parsed, {
+      dialect: 'pg',
+      buildQuery: (): QuerySpy => new QuerySpy(),
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          orderBy: staticOrder,
+          buildQuery: (): QuerySpy => relationQuery,
+        },
+      ],
+    });
+
+    // One orderBy call with client sort + static sort concatenated
+    expect(relationQuery.orderByCalls).toHaveLength(1);
+    expect(relationQuery.orderByCalls[0]).toHaveLength(2);
+    // Static orderBy is at the end (tiebreaker)
+    expect(relationQuery.orderByCalls[0]?.[1]).toBe(staticOrder[0]);
+  });
+
+  it('passes relation limit through to relationQueries', () => {
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+    });
+
+    const result = generatePaginationQuery(parsed, {
+      dialect: 'pg',
+      buildQuery: (): QuerySpy => new QuerySpy(),
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          limit: 3,
+          buildQuery: (): QuerySpy => new QuerySpy(),
+        },
+      ],
+    });
+
+    expect(result.relationQueries[0]?.limit).toBe(3);
+  });
+
   it('does not apply limit/offset on relation queries', () => {
     const mainQuery = new QuerySpy();
     const relationQuery = new QuerySpy();
@@ -1205,6 +1295,52 @@ describe('generateSelectQuery', () => {
 
     expect(relationQuery.whereCalls).toHaveLength(0);
     expect(relationQuery.orderByCalls).toHaveLength(0);
+  });
+
+  it('applies static relation orderBy on the relation query', () => {
+    const relationQuery = new QuerySpy();
+    const staticOrder = [sql`1`];
+
+    const parsed = toSelectParsed(['posts.title']);
+
+    generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => new QuerySpy(),
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          orderBy: staticOrder,
+          buildQuery: (): QuerySpy => relationQuery,
+        },
+      ],
+    });
+
+    expect(relationQuery.orderByCalls).toHaveLength(1);
+    expect(relationQuery.orderByCalls[0]).toEqual(staticOrder);
+  });
+
+  it('passes relation limit through to relationQueries', () => {
+    const parsed = toSelectParsed(['posts.title']);
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => new QuerySpy(),
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          limit: 5,
+          buildQuery: (): QuerySpy => new QuerySpy(),
+        },
+      ],
+    });
+
+    expect(result.relationQueries[0]?.limit).toBe(5);
   });
 
   it('works with assembleDrizzleRelations for end-to-end flow', () => {
@@ -1681,6 +1817,66 @@ describe('assembleDrizzleRelations', () => {
     const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
 
     expect(assembled[0]?.posts).toEqual([{ title: 'Post A' }]);
+  });
+
+  it('applies per-parent limit when limit is set', () => {
+    const mainRows = [
+      { __pk_posts: 1, name: 'Alice' },
+      { __pk_posts: 2, name: 'Bob' },
+    ];
+
+    const relationQueries = [
+      {
+        relationName: 'posts',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'many' as const,
+        limit: 2,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const relationResults = [
+      [
+        { __fk: 1, title: 'A1' },
+        { __fk: 1, title: 'A2' },
+        { __fk: 1, title: 'A3' },
+        { __fk: 2, title: 'B1' },
+      ],
+    ];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
+
+    // Alice has 3 children but only 2 kept
+    expect(assembled[0]?.posts).toEqual([{ title: 'A1' }, { title: 'A2' }]);
+    // Bob has 1 child — all kept (under limit)
+    expect(assembled[1]?.posts).toEqual([{ title: 'B1' }]);
+  });
+
+  it('does not apply limit when limit is undefined', () => {
+    const mainRows = [{ __pk_posts: 1, name: 'Alice' }];
+
+    const relationQueries = [
+      {
+        relationName: 'posts',
+        parentKey: users.id,
+        foreignKeyAlias: '__fk',
+        mode: 'many' as const,
+        query: new QuerySpy(),
+      },
+    ];
+
+    const relationResults = [
+      [
+        { __fk: 1, title: 'A1' },
+        { __fk: 1, title: 'A2' },
+        { __fk: 1, title: 'A3' },
+      ],
+    ];
+
+    const assembled = assembleDrizzleRelations(mainRows, relationQueries, relationResults);
+
+    expect(assembled[0]?.posts).toHaveLength(3);
   });
 });
 
