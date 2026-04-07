@@ -987,6 +987,63 @@ async function executeCountQuery<TColumn extends DrizzleSqlColumn>(
 }
 
 /**
+ * Builds a SQL filter to scope relation queries to the parent IDs present in
+ * the main query results.
+ *
+ * Single FK  → `foreignKey IN (id1, id2, …)`
+ * Composite  → `(fk1 = v1 AND fk2 = v2) OR …`
+ *
+ * Returns `undefined` when no valid parent IDs are found (the relation query
+ * should be skipped entirely in that case).
+ */
+function buildRelationScope(
+  mainRows: Record<string, unknown>[],
+  relationName: string,
+  parentKey: DrizzleSqlColumn | DrizzleSqlColumn[],
+  foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[],
+  operators: DrizzleSqlOperatorSet,
+): SQL | undefined {
+  const parentKeys = toArray(parentKey);
+  const foreignKeys = toArray(foreignKey);
+  const pkAliases = collectAliases(buildPkAliases(relationName, parentKeys));
+
+  if (foreignKeys.length === 1) {
+    const pkAlias = pkAliases[0];
+    if (!pkAlias) return undefined;
+    const ids = new Set<unknown>();
+    for (const row of mainRows) {
+      const v = row[pkAlias];
+      if (v != null) ids.add(v);
+    }
+    if (ids.size === 0) return undefined;
+    const fk = foreignKeys[0];
+    if (!fk) return undefined;
+    return operators.inArray(fk, [...ids]);
+  }
+
+  // Composite FK: OR of AND(eq(fk_0, v_0), eq(fk_1, v_1), …)
+  const seen = new Set<string>();
+  const conditions: SQL[] = [];
+  for (const row of mainRows) {
+    const tuple = pkAliases.map((a) => row[a]);
+    if (tuple.some((v) => v == null)) continue;
+    const key = JSON.stringify(tuple);
+    if (!seen.has(key)) {
+      seen.add(key);
+      const parts = foreignKeys.map((fk, i) => operators.eq(fk, tuple[i]));
+      conditions.push(andSql(...parts));
+    }
+  }
+  if (conditions.length === 0) return undefined;
+  if (conditions.length === 1) {
+    const single = conditions[0];
+    if (!single) return undefined;
+    return single;
+  }
+  return orSql(...conditions);
+}
+
+/**
  * Builds a single relation query from the parsed pagination, extracting only
  * the select/filter/sort fields prefixed with the relation name.
  */
@@ -996,6 +1053,7 @@ function buildSingleRelationQuery(
   operators: DrizzleSqlOperatorSet,
   selectAlias: (fieldPath: string) => string,
   strictFieldMapping: boolean,
+  parentScope?: SQL,
 ): DrizzleRelationQuery<DrizzleSqlColumn> {
   // ── Select ──────────────────────────────────────────────────────
   const relationSelectPaths: string[] = [];
@@ -1063,8 +1121,14 @@ function buildSingleRelationQuery(
   // ── Build query ─────────────────────────────────────────────────
   let query = relation.buildQuery(selectShape).$dynamic();
 
-  if (relationWhere) {
-    query = query.where(relationWhere);
+  // Combine relation-level filters with parent-scope IN clause.
+  const combinedWhere =
+    relationWhere && parentScope
+      ? andSql(relationWhere, parentScope)
+      : (relationWhere ?? parentScope);
+
+  if (combinedWhere) {
+    query = query.where(combinedWhere);
   }
   if (relationOrderBy.length > 0) {
     query = query.orderBy(...relationOrderBy);
@@ -1077,6 +1141,61 @@ function buildSingleRelationQuery(
     foreignKeyAlias: fkAliases,
     mode: relation.mode ?? 'many',
     query,
+  };
+}
+
+/**
+ * Builds a select-only relation query (no filters / sort).
+ * Used by `generateSelectQuery` and its scoped `execute()`.
+ */
+function buildSelectOnlyRelationQuery(
+  allSelectPaths: readonly string[],
+  relation: AnyDrizzleRelation,
+  selectAlias: (fieldPath: string) => string,
+  strictFieldMapping: boolean,
+  parentScope?: SQL,
+): DrizzleRelationQuery<DrizzleSqlColumn> {
+  const relationSelectPaths: string[] = [];
+  for (const fieldPath of allSelectPaths) {
+    const subPath = stripRelationPrefix(fieldPath, relation.relationName);
+    if (subPath !== undefined) {
+      relationSelectPaths.push(subPath);
+    }
+  }
+
+  const relationFields: DrizzleFieldMap<DataSchema, DrizzleSqlColumn> = relation.fields;
+
+  const selectShape = buildSelectShapeInternal(
+    relationSelectPaths,
+    relationFields,
+    strictFieldMapping,
+    selectAlias,
+  );
+
+  // Always include the foreign key(s) so we can match parent ↔ child.
+  const foreignKeys = toArray(relation.foreignKey);
+  const fkAliases = buildFkAliases(foreignKeys);
+  const fkAliasList = collectAliases(fkAliases);
+  for (let j = 0; j < foreignKeys.length; j++) {
+    const alias = fkAliasList[j];
+    const col = foreignKeys[j];
+    if (alias !== undefined && col !== undefined) {
+      selectShape[alias] = col;
+    }
+  }
+
+  let relationQuery: DrizzleDynamicQuery = relation.buildQuery(selectShape).$dynamic();
+
+  if (parentScope) {
+    relationQuery = relationQuery.where(parentScope);
+  }
+
+  return {
+    relationName: relation.relationName,
+    parentKey: relation.parentKey,
+    foreignKeyAlias: fkAliases,
+    mode: relation.mode ?? 'many',
+    query: relationQuery,
   };
 }
 
@@ -1275,21 +1394,44 @@ export function generatePaginationQuery<
   type ExecuteResult = DrizzlePaginationExecuteResult<TFields, TRelations>;
 
   const execute = async (): Promise<ExecuteResult> => {
-    // Run main + relation queries in parallel.
-    const promises: PromiseLike<Record<string, unknown>[]>[] = [
-      query,
-      ...relationQueries.map((r) => r.query),
-    ];
+    // Start count query early so it runs in parallel with the main query.
+    const countPromise: PromiseLike<number> =
+      parsed.pagination.type === 'LIMIT_OFFSET'
+        ? executeCountQuery(config.buildQuery, clauses.where)
+        : Promise.resolve(0);
 
-    const results = await Promise.all(promises);
-    const mainRows = results[0] ?? [];
-    const relationResults = results.slice(1);
-    const data = assemble(mainRows, relationResults);
+    // Execute main query first to obtain parent IDs for relation scoping.
+    const mainRows: Record<string, unknown>[] = await query;
+
+    // Build scoped relation queries (filtered by parent IDs).
+    const scopedQueries = relations.map((relation) => {
+      const scope = buildRelationScope(
+        mainRows,
+        relation.relationName,
+        relation.parentKey,
+        relation.foreignKey,
+        operators,
+      );
+      return buildSingleRelationQuery(
+        pagination,
+        relation,
+        operators,
+        aliasBuilder,
+        strictFieldMapping,
+        scope,
+      );
+    });
+
+    const scopedRelationResults =
+      scopedQueries.length > 0 ? await Promise.all(scopedQueries.map((rq) => rq.query)) : [];
+
+    const data = coerceAssembledRows<AssembledRow>(
+      assembleDrizzleRelations(mainRows, scopedQueries, scopedRelationResults),
+    );
 
     // Build pagination metadata depending on the type.
     if (parsed.pagination.type === 'LIMIT_OFFSET') {
-      // Derive count from buildQuery automatically, applying the same WHERE clause.
-      const totalItems = await executeCountQuery(config.buildQuery, clauses.where);
+      const totalItems = await countPromise;
 
       const paginationMeta = buildLimitOffsetResponseMeta(
         { pagination: parsed.pagination },
@@ -1404,47 +1546,14 @@ export function generateSelectQuery<
 
   const query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
 
+  // Operators for building relation scope filters (eq / inArray are dialect-independent).
+  const scopeOperators = createPgDrizzleOperators();
+
   // ── Build relation queries (select-only, no filters/sort) ───────
-  const relationQueries = relations.map((relation): DrizzleRelationQuery<DrizzleSqlColumn> => {
-    const relationSelectPaths: string[] = [];
-    for (const fieldPath of parsed.select) {
-      const subPath = stripRelationPrefix(fieldPath, relation.relationName);
-      if (subPath !== undefined) {
-        relationSelectPaths.push(subPath);
-      }
-    }
-
-    const relationFields: DrizzleFieldMap<DataSchema, DrizzleSqlColumn> = relation.fields;
-
-    const selectShape = buildSelectShapeInternal(
-      relationSelectPaths,
-      relationFields,
-      strictFieldMapping,
-      aliasBuilder,
-    );
-
-    // Always include the foreign key(s) so we can match parent ↔ child.
-    const foreignKeys = toArray(relation.foreignKey);
-    const fkAliases = buildFkAliases(foreignKeys);
-    const fkAliasList = collectAliases(fkAliases);
-    for (let j = 0; j < foreignKeys.length; j++) {
-      const alias = fkAliasList[j];
-      const col = foreignKeys[j];
-      if (alias !== undefined && col !== undefined) {
-        selectShape[alias] = col;
-      }
-    }
-
-    const relationQuery: DrizzleDynamicQuery = relation.buildQuery(selectShape).$dynamic();
-
-    return {
-      relationName: relation.relationName,
-      parentKey: relation.parentKey,
-      foreignKeyAlias: fkAliases,
-      mode: relation.mode ?? 'many',
-      query: relationQuery,
-    };
-  });
+  const selectPaths = parsed.select.map(String);
+  const relationQueries = relations.map((relation) =>
+    buildSelectOnlyRelationQuery(selectPaths, relation, aliasBuilder, strictFieldMapping),
+  );
 
   // ── assemble / execute helpers ──────────────────────────────────
   type AssembledRow = InferAssembledRow<TFields, TRelations>;
@@ -1458,15 +1567,33 @@ export function generateSelectQuery<
     );
 
   const execute = async (): Promise<{ data: AssembledRow[] }> => {
-    const promises: PromiseLike<Record<string, unknown>[]>[] = [
-      query,
-      ...relationQueries.map((r) => r.query),
-    ];
+    // Execute main query first to obtain parent IDs for relation scoping.
+    const mainRows: Record<string, unknown>[] = await query;
 
-    const results = await Promise.all(promises);
-    const mainRows = results[0] ?? [];
-    const relationResults = results.slice(1);
-    const data = assemble(mainRows, relationResults);
+    // Build scoped relation queries (filtered by parent IDs).
+    const scopedQueries = relations.map((relation) => {
+      const scope = buildRelationScope(
+        mainRows,
+        relation.relationName,
+        relation.parentKey,
+        relation.foreignKey,
+        scopeOperators,
+      );
+      return buildSelectOnlyRelationQuery(
+        selectPaths,
+        relation,
+        aliasBuilder,
+        strictFieldMapping,
+        scope,
+      );
+    });
+
+    const scopedRelationResults =
+      scopedQueries.length > 0 ? await Promise.all(scopedQueries.map((rq) => rq.query)) : [];
+
+    const data = coerceAssembledRows<AssembledRow>(
+      assembleDrizzleRelations(mainRows, scopedQueries, scopedRelationResults),
+    );
 
     return { data };
   };
