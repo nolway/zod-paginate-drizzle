@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.0.0...v2.1.0) (2026-04-07)
+
+
+### Features
+
+* add limit and orderBy on relations ([fedcc39](https://github.com/nolway/zod-paginate-drizzle/commit/fedcc39e62667667c785ad54186b73a5cdfaf2c1))
+* add relation mode ([671bae8](https://github.com/nolway/zod-paginate-drizzle/commit/671bae8928906e887a71a58486d8282e13ae913e))
+
+
+### Miscellaneous Chores
+
+* release 2.1.0 ([9e28f9c](https://github.com/nolway/zod-paginate-drizzle/commit/9e28f9c16cdff3b0fefd8ee98e263ffd13efa30f))
+
 ## [2.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v1.0.1...v2.0.0) (2026-03-12)
 
 
