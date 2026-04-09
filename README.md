@@ -103,6 +103,28 @@ const { data } = await result.execute();
 // data[0].posts is an array of { title }
 ```
 
+#### Single-object response with `responseType: 'one'`
+
+When `zod-paginate`'s `select()` is configured with `responseType: 'one'`, the parsed params include `responseType: 'one'`. `generateSelectQuery` automatically applies `LIMIT 1` and returns a single object (or `null`) instead of an array:
+
+```ts
+const parsed = {
+  select: ['id', 'name', 'email'],
+  responseType: 'one',  // ← from zod-paginate's select({ responseType: 'one' })
+};
+
+const result = generateSelectQuery(parsed, {
+  buildQuery: (select) => db.select(select).from(users),
+  fields: { id: users.id, name: users.name, email: users.email },
+});
+
+const { data } = await result.execute();
+// data = { id: 1, name: 'Alice', email: 'alice@test.com' }
+// or data = null if no row is found
+```
+
+When `responseType` is `'many'` (the default) or omitted, `data` remains an array as before.
+
 ### Without relations
 
 `relations` is optional — simply omit it:
@@ -213,6 +235,8 @@ const { pagination } = await result.execute();
 
 Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryParams` from `zod-paginate` (only a `select` array — no filters, sorting, or pagination).
 
+When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `{ data: T | null }` instead of `{ data: T[] }`.
+
 **Config**:
 
 | Option | Type | Description |
@@ -230,7 +254,7 @@ Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPar
 | `query` | `DrizzleDynamicQuery` | The main Drizzle query (awaitable) |
 | `relationQueries` | `DrizzleRelationQuery[]` | Prepared relation queries |
 | `assemble` | `(mainRows, relationResults) => rows` | Manual row assembler |
-| `execute` | `() => Promise<{ data }>` | Runs everything and returns assembled data |
+| `execute` | `() => Promise<{ data }>` | Runs everything and returns assembled data. When `responseType` is `'one'`: `data` is a single object or `null`. Otherwise: `data` is an array. |
 
 ### `defineRelation(config)`
 

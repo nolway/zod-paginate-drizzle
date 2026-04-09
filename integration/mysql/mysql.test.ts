@@ -1,10 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import type { DataSchema, PaginationQueryParams } from 'zod-paginate';
+import type { DataSchema, PaginationQueryParams, SelectQueryParams } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   defineRelation,
   generatePaginationQuery,
+  generateSelectQuery,
 } from '../../src/drizzle-adapter';
 import { users, posts } from './schemas';
 import { db, seedUsers, setupMysql } from './setup';
@@ -630,5 +631,96 @@ describe('MySQL integration', () => {
         totalPages: 1,
       }),
     );
+  });
+
+  it('generateSelectQuery with responseType "one" returns a single object', async () => {
+    await seedUsers();
+
+    const parsed: SelectQueryParams<DataSchema> = {
+      select: ['id', 'name', 'email'],
+      responseType: 'one',
+    };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name, email: users.email },
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).not.toBeNull();
+    expect(Array.isArray(data)).toBe(false);
+    expect(data).toHaveProperty('name');
+    expect(data).toHaveProperty('email');
+  });
+
+  it('generateSelectQuery with responseType "one" returns null when no rows match', async () => {
+    // No seed — empty table
+
+    const parsed: SelectQueryParams<DataSchema> = {
+      select: ['id', 'name'],
+      responseType: 'one',
+    };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name },
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).toBeNull();
+  });
+
+  it('generateSelectQuery with responseType "one" and relations returns a single assembled object', async () => {
+    await seedUsers();
+
+    await db.execute(sql`
+      INSERT INTO posts (title, author_id) VALUES ('Post A1', 1), ('Post A2', 1)
+    `);
+
+    const parsed: SelectQueryParams<DataSchema> = {
+      select: ['id', 'name', 'posts.id', 'posts.title'],
+      responseType: 'one',
+    };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name },
+      relations: [
+        defineRelation({
+          relationName: 'posts',
+          fields: { id: posts.id, title: posts.title },
+          foreignKey: posts.authorId,
+          parentKey: users.id,
+          buildQuery: (select) => db.select(select).from(posts),
+        }),
+      ],
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).not.toBeNull();
+    expect(Array.isArray(data)).toBe(false);
+    expect(data).toHaveProperty('name');
+    expect(data).toHaveProperty('posts');
+  });
+
+  it('generateSelectQuery without responseType returns an array', async () => {
+    await seedUsers();
+
+    const parsed: SelectQueryParams<DataSchema> = {
+      select: ['id', 'name'],
+    };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (select) => db.select(select).from(users),
+      fields: { id: users.id, name: users.name },
+    });
+
+    const { data } = await result.execute();
+
+    expect(Array.isArray(data)).toBe(true);
+    expect(data).toHaveLength(5);
   });
 });

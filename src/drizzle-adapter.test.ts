@@ -1475,6 +1475,144 @@ describe('generateSelectQuery', () => {
     expect(data).toHaveLength(1);
     expect(data[0]).toEqual({ name: 'Alice', posts: [{ title: 'Hello' }] });
   });
+
+  it('applies limit 1 on main query when responseType is "one"', () => {
+    const mainQuery = new QuerySpy();
+
+    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+
+    generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainQuery,
+      fields: { name: users.name },
+    });
+
+    expect(mainQuery.limitCalls).toEqual([1]);
+  });
+
+  it('does not apply limit on main query when responseType is "many"', () => {
+    const mainQuery = new QuerySpy();
+
+    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'many' };
+
+    generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainQuery,
+      fields: { name: users.name },
+    });
+
+    expect(mainQuery.limitCalls).toHaveLength(0);
+  });
+
+  it('does not apply limit on main query when responseType is undefined', () => {
+    const mainQuery = new QuerySpy();
+
+    const parsed = toSelectParsed(['name']);
+
+    generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainQuery,
+      fields: { name: users.name },
+    });
+
+    expect(mainQuery.limitCalls).toHaveLength(0);
+  });
+
+  it('execute() returns a single object when responseType is "one"', async () => {
+    const mainSpy = new QuerySpy();
+
+    const mainData = [{ name: 'Alice' }];
+
+    vi.spyOn(mainSpy, 'then').mockImplementation((onfulfilled) =>
+      Promise.resolve(mainData).then(onfulfilled),
+    );
+
+    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainSpy,
+      fields: { name: users.name },
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).toEqual({ name: 'Alice' });
+  });
+
+  it('execute() returns null when responseType is "one" and no rows', async () => {
+    const mainSpy = new QuerySpy();
+
+    vi.spyOn(mainSpy, 'then').mockImplementation((onfulfilled) =>
+      Promise.resolve([]).then(onfulfilled),
+    );
+
+    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainSpy,
+      fields: { name: users.name },
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).toBeNull();
+  });
+
+  it('execute() returns an array when responseType is "many"', async () => {
+    const mainSpy = new QuerySpy();
+
+    const mainData = [{ name: 'Alice' }, { name: 'Bob' }];
+
+    vi.spyOn(mainSpy, 'then').mockImplementation((onfulfilled) =>
+      Promise.resolve(mainData).then(onfulfilled),
+    );
+
+    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'many' };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainSpy,
+      fields: { name: users.name },
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).toEqual([{ name: 'Alice' }, { name: 'Bob' }]);
+  });
+
+  it('execute() returns single object with relations when responseType is "one"', async () => {
+    const mainSpy = new QuerySpy();
+    const relationSpy = new QuerySpy();
+
+    const mainData = [{ __pk_posts: 1, name: 'Alice' }];
+    const relationData = [{ __fk: 1, title: 'Hello' }];
+
+    vi.spyOn(mainSpy, 'then').mockImplementation((onfulfilled) =>
+      Promise.resolve(mainData).then(onfulfilled),
+    );
+    vi.spyOn(relationSpy, 'then').mockImplementation((onfulfilled) =>
+      Promise.resolve(relationData).then(onfulfilled),
+    );
+
+    const parsed: SelectQueryParams<DataSchema> = {
+      select: ['name', 'posts.title'],
+      responseType: 'one',
+    };
+
+    const result = generateSelectQuery(parsed, {
+      buildQuery: (): QuerySpy => mainSpy,
+      fields: { name: users.name },
+      relations: [
+        {
+          relationName: 'posts',
+          fields: { title: postsTable.title },
+          foreignKey: postsTable.authorId,
+          parentKey: users.id,
+          buildQuery: (): QuerySpy => relationSpy,
+        },
+      ],
+    });
+
+    const { data } = await result.execute();
+
+    expect(data).toEqual({ name: 'Alice', posts: [{ title: 'Hello' }] });
+  });
 });
 
 describe('assembleDrizzleRelations', () => {

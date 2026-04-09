@@ -26,6 +26,7 @@ import type {
   PaginationQueryParams,
   PaginationType,
   SelectQueryParams,
+  SelectResponseType,
   SortDirection,
   WhereNode,
 } from 'zod-paginate';
@@ -369,6 +370,15 @@ export interface DrizzlePaginationExecuteResult<
   pagination: InferPaginationResponseMeta<TType>;
 }
 
+/** Resolves the `data` type based on `SelectResponseType`. */
+export type InferSelectExecuteData<
+  TFields extends Record<string, unknown>,
+  TRelations extends readonly AnyDrizzleRelation[],
+  TResponseType extends SelectResponseType,
+> = TResponseType extends 'one'
+  ? InferAssembledRow<TFields, TRelations> | null
+  : InferAssembledRow<TFields, TRelations>[];
+
 /**
  * Result of `generateSelectQuery`.
  *
@@ -378,6 +388,7 @@ export interface DrizzlePaginationExecuteResult<
 export interface DrizzleSelectWithRelationsResult<
   TFields extends Record<string, unknown> = Record<string, unknown>,
   TRelations extends readonly AnyDrizzleRelation[] = readonly AnyDrizzleRelation[],
+  TResponseType extends SelectResponseType = 'many',
 > {
   /** Ready-to-execute main query. */
   query: DrizzleDynamicQuery;
@@ -395,7 +406,7 @@ export interface DrizzleSelectWithRelationsResult<
    * Executes **all** queries (main + relations), assembles nested objects
    * and returns `{ data }`.
    */
-  execute: () => Promise<{ data: InferAssembledRow<TFields, TRelations>[] }>;
+  execute: () => Promise<{ data: InferSelectExecuteData<TFields, TRelations, TResponseType> }>;
 }
 
 export type DrizzleSelectShape<TColumn> = Record<string, TColumn>;
@@ -1551,6 +1562,24 @@ export function generateSelectQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
+  parsed: SelectQueryParams<TSchema> & { responseType: 'one' },
+  config: {
+    buildQuery: (
+      selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
+    ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    relations?: TRelations;
+    strictFieldMapping?: boolean;
+    selectAlias?: (fieldPath: string) => string;
+  },
+): DrizzleSelectWithRelationsResult<TFields, TRelations, 'one'>;
+
+export function generateSelectQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
   parsed: SelectQueryParams<TSchema>,
   config: {
     buildQuery: (
@@ -1561,7 +1590,25 @@ export function generateSelectQuery<
     strictFieldMapping?: boolean;
     selectAlias?: (fieldPath: string) => string;
   },
-): DrizzleSelectWithRelationsResult<TFields, TRelations> {
+): DrizzleSelectWithRelationsResult<TFields, TRelations>;
+
+export function generateSelectQuery<
+  TSchema extends DataSchema,
+  TColumn extends DrizzleSqlColumn,
+  TFields extends Record<string, TColumn>,
+  const TRelations extends readonly AnyDrizzleRelation[],
+>(
+  parsed: SelectQueryParams<TSchema>,
+  config: {
+    buildQuery: (
+      selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
+    ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    relations?: TRelations;
+    strictFieldMapping?: boolean;
+    selectAlias?: (fieldPath: string) => string;
+  },
+): DrizzleSelectWithRelationsResult<TFields, TRelations, SelectResponseType> {
   const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
   const strictFieldMapping = config.strictFieldMapping ?? true;
   // @ts-expect-error -- empty array is a valid runtime fallback for TRelations
@@ -1594,7 +1641,12 @@ export function generateSelectQuery<
   }
   Object.assign(mainSelectShape, parentKeyFields);
 
-  const query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
+  let query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
+
+  // When responseType is 'one', limit to a single row.
+  if (parsed.responseType === 'one') {
+    query = query.limit(1);
+  }
 
   // Operators for building relation scope filters (eq / inArray are dialect-independent).
   const scopeOperators = createPgDrizzleOperators();
@@ -1607,6 +1659,7 @@ export function generateSelectQuery<
 
   // ── assemble / execute helpers ──────────────────────────────────
   type AssembledRow = InferAssembledRow<TFields, TRelations>;
+  type ExecuteData = InferSelectExecuteData<TFields, TRelations, SelectResponseType>;
 
   const assemble = (
     mainRows: Record<string, unknown>[],
@@ -1616,7 +1669,7 @@ export function generateSelectQuery<
       assembleDrizzleRelations(mainRows, relationQueries, relationResults),
     );
 
-  const execute = async (): Promise<{ data: AssembledRow[] }> => {
+  const execute = async (): Promise<{ data: ExecuteData }> => {
     // Execute main query first to obtain parent IDs for relation scoping.
     const mainRows: Record<string, unknown>[] = await query;
 
@@ -1641,10 +1694,16 @@ export function generateSelectQuery<
     const scopedRelationResults =
       scopedQueries.length > 0 ? await Promise.all(scopedQueries.map((rq) => rq.query)) : [];
 
-    const data = coerceAssembledRows<AssembledRow>(
+    const rows = coerceAssembledRows<AssembledRow>(
       assembleDrizzleRelations(mainRows, scopedQueries, scopedRelationResults),
     );
 
+    if (parsed.responseType === 'one') {
+      const data: ExecuteData = rows[0] ?? null;
+      return { data };
+    }
+
+    const data: ExecuteData = rows;
     return { data };
   };
 
