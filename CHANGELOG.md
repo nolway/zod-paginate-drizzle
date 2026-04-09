@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.1.0...v2.2.0) (2026-04-09)
+
+
+### Features
+
+* handle responseType to return only one object ([b0ad721](https://github.com/nolway/zod-paginate-drizzle/commit/b0ad721352e72f1154d1931c1eda09b570c33c48))
+
+
+### Miscellaneous Chores
+
+* release 2.2.0 ([66ffa79](https://github.com/nolway/zod-paginate-drizzle/commit/66ffa797e61fd1f7a475855aced5bd49548f4b14))
+
 ## [2.1.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.0.0...v2.1.0) (2026-04-07)
 
 
