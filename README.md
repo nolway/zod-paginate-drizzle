@@ -76,13 +76,13 @@ const { data, pagination } = await result.execute();
 
 ### Select-only query with `generateSelectQuery`
 
-When you only need to select fields (no filters, sorting, or pagination), use `generateSelectQuery` with `SelectQueryParams` from `zod-paginate`:
+When you only need to select fields (no filters, sorting, or pagination), use `generateSelectQuery` with `SelectQueryPayload` from `zod-paginate`:
 
 ```ts
 import { generateSelectQuery, defineRelation } from 'zod-paginate-drizzle';
 
 const parsed = {
-  select: ['id', 'name', 'posts.title'],
+  select: { fields: ['id', 'name', 'posts.title'] },
 };
 
 const result = generateSelectQuery(parsed, {
@@ -109,8 +109,7 @@ When `zod-paginate`'s `select()` is configured with `responseType: 'one'`, the p
 
 ```ts
 const parsed = {
-  select: ['id', 'name', 'email'],
-  responseType: 'one',  // ← from zod-paginate's select({ responseType: 'one' })
+  select: { fields: ['id', 'name', 'email'], responseType: 'one' },  // ← from zod-paginate's select({ responseType: 'one' })
 };
 
 const result = generateSelectQuery(parsed, {
@@ -233,7 +232,7 @@ const { pagination } = await result.execute();
 
 ### `generateSelectQuery(parsed, config)`
 
-Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryParams` from `zod-paginate` (only a `select` array — no filters, sorting, or pagination).
+Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPayload` from `zod-paginate` (only a `select` array — no filters, sorting, or pagination).
 
 When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `{ data: T | null }` instead of `{ data: T[] }`.
 
@@ -338,10 +337,10 @@ Computes limit/offset pagination metadata from parsed params and total count.
 Returns `LimitOffsetPaginationResponseMeta`:
 
 ```ts
-{ totalItems, totalPages, currentPage, itemsPerPage }
+{ totalItems, totalPages, currentPage, itemsPerPage, sortBy, filter }
 ```
 
-### `buildCursorResponseMeta(parsed, rows, cursorField?)`
+### `buildCursorResponseMeta(parsed, rows, cursorField?, selectAlias?)`
 
 Computes cursor pagination metadata from parsed params and result rows.
 

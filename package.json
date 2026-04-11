@@ -32,8 +32,8 @@
     "test:integration:mysql": "vitest --run --config vitest.integration.config.ts integration/mysql",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "lint": "eslint \"src/**/*.{ts,json}\"",
-    "lint:fix": "eslint \"src/**/*.{ts,json}\" --fix",
+    "lint": "eslint \"src/**/*.{ts,json}\" \"integration/**/*.{ts,json}\"",
+    "lint:fix": "eslint \"src/**/*.{ts,json}\" \"integration/**/*.{ts,json}\" --fix",
     "prepare": "husky",
     "precommit": "lint-staged",
     "typecheck": "tsc --skipLibCheck --project tsconfig.json --noEmit --pretty false"
@@ -43,12 +43,14 @@
     "dist/**/*"
   ],
   "peerDependencies": {
-    "zod": "^4.3.6"
+    "drizzle-orm": "^0.45.2",
+    "zod": "^4.3.6",
+    "zod-paginate": "^1.7.0"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "zod": "^4.3.6",
-    "zod-paginate": "^1.5.0"
+    "zod-paginate": "^1.7.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.1",

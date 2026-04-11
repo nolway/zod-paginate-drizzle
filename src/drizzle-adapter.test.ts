@@ -1,7 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import type { DataSchema, PaginationQueryParams, SelectQueryParams } from 'zod-paginate';
+import type { DataSchema, PaginationQueryParams, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   generatePaginationQuery,
@@ -1161,11 +1161,53 @@ describe('generatePaginationQuery', () => {
       }),
     );
   });
+
+  it('injects cursorProperty into select shape when not explicitly selected', () => {
+    const buildMainQuery = vi.fn((): QuerySpy => new QuerySpy());
+
+    const parsed = toParsed({
+      type: 'CURSOR',
+      limit: 10,
+      cursorProperty: 'id',
+      select: ['name'],
+      sortBy: [{ property: 'id', direction: 'ASC' }],
+    });
+
+    const result = generatePaginationQuery(parsed, {
+      dialect: 'pg',
+      buildQuery: buildMainQuery,
+      fields: { id: users.id, name: users.name },
+    });
+
+    expect(buildMainQuery).toHaveBeenCalledWith(expect.objectContaining({ id: users.id }));
+    expect(result.clauses.cursorProperty).toBe('id');
+  });
+
+  it('does not duplicate cursorProperty when already selected', () => {
+    const buildMainQuery = vi.fn((): QuerySpy => new QuerySpy());
+
+    const parsed = toParsed({
+      type: 'CURSOR',
+      limit: 10,
+      cursorProperty: 'id',
+      select: ['id', 'name'],
+      sortBy: [{ property: 'id', direction: 'ASC' }],
+    });
+
+    generatePaginationQuery(parsed, {
+      dialect: 'pg',
+      buildQuery: buildMainQuery,
+      fields: { id: users.id, name: users.name },
+    });
+
+    expect(buildMainQuery).toHaveBeenCalledTimes(1);
+    expect(buildMainQuery).toHaveBeenCalledWith(expect.objectContaining({ id: users.id }));
+  });
 });
 
 describe('generateSelectQuery', () => {
-  function toSelectParsed(select: string[]): SelectQueryParams<DataSchema> {
-    return { select };
+  function toSelectParsed(select: string[]): SelectQueryPayload<DataSchema> {
+    return { select: { fields: select } };
   }
 
   it('partitions select paths between main query and relations', () => {
@@ -1479,7 +1521,9 @@ describe('generateSelectQuery', () => {
   it('applies limit 1 on main query when responseType is "one"', () => {
     const mainQuery = new QuerySpy();
 
-    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: { fields: ['name'], responseType: 'one' },
+    };
 
     generateSelectQuery(parsed, {
       buildQuery: (): QuerySpy => mainQuery,
@@ -1492,7 +1536,9 @@ describe('generateSelectQuery', () => {
   it('does not apply limit on main query when responseType is "many"', () => {
     const mainQuery = new QuerySpy();
 
-    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'many' };
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: { fields: ['name'], responseType: 'many' },
+    };
 
     generateSelectQuery(parsed, {
       buildQuery: (): QuerySpy => mainQuery,
@@ -1524,7 +1570,9 @@ describe('generateSelectQuery', () => {
       Promise.resolve(mainData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: { fields: ['name'], responseType: 'one' },
+    };
 
     const result = generateSelectQuery(parsed, {
       buildQuery: (): QuerySpy => mainSpy,
@@ -1543,7 +1591,9 @@ describe('generateSelectQuery', () => {
       Promise.resolve([]).then(onfulfilled),
     );
 
-    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'one' };
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: { fields: ['name'], responseType: 'one' },
+    };
 
     const result = generateSelectQuery(parsed, {
       buildQuery: (): QuerySpy => mainSpy,
@@ -1564,7 +1614,9 @@ describe('generateSelectQuery', () => {
       Promise.resolve(mainData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryParams<DataSchema> = { select: ['name'], responseType: 'many' };
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: { fields: ['name'], responseType: 'many' },
+    };
 
     const result = generateSelectQuery(parsed, {
       buildQuery: (): QuerySpy => mainSpy,
@@ -1590,9 +1642,11 @@ describe('generateSelectQuery', () => {
       Promise.resolve(relationData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryParams<DataSchema> = {
-      select: ['name', 'posts.title'],
-      responseType: 'one',
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: {
+        fields: ['name', 'posts.title'],
+        responseType: 'one',
+      },
     };
 
     const result = generateSelectQuery(parsed, {

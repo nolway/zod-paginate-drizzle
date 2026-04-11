@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import type { DataSchema, PaginationQueryParams, SelectQueryParams } from 'zod-paginate';
+import type { DataSchema, PaginationQueryParams, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   defineRelation,
@@ -636,9 +636,11 @@ describe('MySQL integration', () => {
   it('generateSelectQuery with responseType "one" returns a single object', async () => {
     await seedUsers();
 
-    const parsed: SelectQueryParams<DataSchema> = {
-      select: ['id', 'name', 'email'],
-      responseType: 'one',
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: {
+        fields: ['id', 'name', 'email'],
+        responseType: 'one',
+      },
     };
 
     const result = generateSelectQuery(parsed, {
@@ -657,9 +659,11 @@ describe('MySQL integration', () => {
   it('generateSelectQuery with responseType "one" returns null when no rows match', async () => {
     // No seed — empty table
 
-    const parsed: SelectQueryParams<DataSchema> = {
-      select: ['id', 'name'],
-      responseType: 'one',
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: {
+        fields: ['id', 'name'],
+        responseType: 'one',
+      },
     };
 
     const result = generateSelectQuery(parsed, {
@@ -679,9 +683,11 @@ describe('MySQL integration', () => {
       INSERT INTO posts (title, author_id) VALUES ('Post A1', 1), ('Post A2', 1)
     `);
 
-    const parsed: SelectQueryParams<DataSchema> = {
-      select: ['id', 'name', 'posts.id', 'posts.title'],
-      responseType: 'one',
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: {
+        fields: ['id', 'name', 'posts.id', 'posts.title'],
+        responseType: 'one',
+      },
     };
 
     const result = generateSelectQuery(parsed, {
@@ -709,8 +715,10 @@ describe('MySQL integration', () => {
   it('generateSelectQuery without responseType returns an array', async () => {
     await seedUsers();
 
-    const parsed: SelectQueryParams<DataSchema> = {
-      select: ['id', 'name'],
+    const parsed: SelectQueryPayload<DataSchema> = {
+      select: {
+        fields: ['id', 'name'],
+      },
     };
 
     const result = generateSelectQuery(parsed, {

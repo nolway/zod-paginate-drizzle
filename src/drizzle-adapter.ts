@@ -25,7 +25,7 @@ import type {
   LimitOffsetPaginationResponseMeta,
   PaginationQueryParams,
   PaginationType,
-  SelectQueryParams,
+  SelectQueryPayload,
   SelectResponseType,
   SortDirection,
   WhereNode,
@@ -161,13 +161,40 @@ export type InferRelationRow<TRel> = TRel extends {
  * explicit type annotation on `select`.
  */
 export interface AnyDrizzleRelation {
+  /** Name used as the key in the assembled result (e.g. `"posts"`). */
   relationName: string;
+  /** Column map for the child table — keys are the sub-field names. */
   fields: Record<string, DrizzleSqlColumn>;
+  /**
+   * The column(s) on the **child** table that reference the parent.
+   * Use an array for composite foreign keys.
+   */
   foreignKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  /**
+   * The column(s) on the **parent** table referenced by `foreignKey`.
+   * Must have the same length as `foreignKey` when using arrays.
+   */
   parentKey: DrizzleSqlColumn | DrizzleSqlColumn[];
+  /**
+   * Controls how the assembled result is shaped:
+   * - `'many'` (default): attaches an **array** of child rows.
+   * - `'one'`: attaches a **single object or `null`** (first match).
+   */
   mode?: RelationMode;
+  /**
+   * Static ordering applied to the relation query.
+   * Acts as a tiebreaker when the client also requests sorting.
+   */
   orderBy?: SQL[];
+  /**
+   * Maximum number of child rows **per parent** to keep after assembly.
+   * Ignored when `mode` is `'one'`.
+   */
   limit?: number;
+  /**
+   * Factory that builds the base query for this relation.
+   * Receives the computed select shape and must return a Drizzle auto-query.
+   */
   buildQuery(selectShape: DrizzleSelectShape<DrizzleSqlColumn>): DrizzleAutoQuery;
 }
 
@@ -1267,14 +1294,37 @@ export interface GeneratePaginationQueryConfig<
   TFields extends Record<string, TColumn>,
   TRelations extends readonly AnyDrizzleRelation[],
 > {
+  /** Database dialect — determines the default operator set (`'pg'` or `'mysql'`). */
   dialect: DrizzleDialect;
+  /**
+   * Factory that receives the generated select shape and must return a Drizzle
+   * query builder (e.g. `db.select(select).from(table)`).
+   */
   buildQuery: (
     selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
   ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+  /**
+   * Map from allowed field paths (used in `select`, `filters`, `sortBy`) to
+   * Drizzle column references.
+   */
   fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+  /** Relations to fetch as separate queries and assemble into parent rows. */
   relations?: TRelations;
+  /**
+   * When `true` (default), throws if a requested field has no mapping in `fields`.
+   * Set to `false` to silently ignore unmapped fields.
+   */
   strictFieldMapping?: boolean;
+  /**
+   * Custom alias generator for select keys. Receives a dotted field path
+   * (e.g. `"posts.title"`) and must return a valid SQL alias.
+   * Defaults to replacing dots with underscores (`"posts_title"`).
+   */
   selectAlias?: (fieldPath: string) => string;
+  /**
+   * Custom operator set. When omitted, the default operator set for the
+   * configured `dialect` is used.
+   */
   operators?: DrizzleSqlOperatorSet;
 }
 
@@ -1421,6 +1471,18 @@ export function generatePaginationQuery<
   // Inject parent key columns into the select shape.
   Object.assign(clauses.select, parentKeyFields);
 
+  // Inject the cursor property column so that cursor metadata can always be
+  // computed, even when the client did not explicitly select the field.
+  if (clauses.cursorProperty) {
+    const cursorAlias = aliasBuilder(clauses.cursorProperty);
+    if (!(cursorAlias in clauses.select)) {
+      const cursorCol = config.fields[clauses.cursorProperty];
+      if (cursorCol) {
+        clauses.select[cursorAlias] = cursorCol;
+      }
+    }
+  }
+
   let query: DrizzleDynamicQuery = config.buildQuery(clauses.select).$dynamic();
 
   if (clauses.where) {
@@ -1518,7 +1580,7 @@ export function generatePaginationQuery<
  * Applies Drizzle select **with relation support** — the select-only counterpart
  * of `generatePaginationQuery`.
  *
- * Works with `SelectQueryParams` (returned by `select()` from `zod-paginate`)
+ * Works with `SelectQueryPayload` (returned by `select()` from `zod-paginate`)
  * instead of the full `PaginationQueryParams`. Since `select()` only produces a
  * `select` array (no filters, sorting, or limit/offset), this function builds a
  * simpler set of queries.
@@ -1562,14 +1624,19 @@ export function generateSelectQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: SelectQueryParams<TSchema> & { responseType: 'one' },
+  parsed: SelectQueryPayload<TSchema> & { responseType: 'one' },
   config: {
+    /** Factory that receives the generated select shape and must return a Drizzle query builder. */
     buildQuery: (
       selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
     ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    /** Map from allowed field paths to Drizzle column references. */
     fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    /** Relations to fetch as separate queries and assemble into parent rows. */
     relations?: TRelations;
+    /** When `true` (default), throws if a requested field has no mapping in `fields`. */
     strictFieldMapping?: boolean;
+    /** Custom alias generator for select keys. Defaults to replacing dots with underscores. */
     selectAlias?: (fieldPath: string) => string;
   },
 ): DrizzleSelectWithRelationsResult<TFields, TRelations, 'one'>;
@@ -1580,14 +1647,19 @@ export function generateSelectQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: SelectQueryParams<TSchema>,
+  parsed: SelectQueryPayload<TSchema>,
   config: {
+    /** Factory that receives the generated select shape and must return a Drizzle query builder. */
     buildQuery: (
       selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
     ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    /** Map from allowed field paths to Drizzle column references. */
     fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    /** Relations to fetch as separate queries and assemble into parent rows. */
     relations?: TRelations;
+    /** When `true` (default), throws if a requested field has no mapping in `fields`. */
     strictFieldMapping?: boolean;
+    /** Custom alias generator for select keys. Defaults to replacing dots with underscores. */
     selectAlias?: (fieldPath: string) => string;
   },
 ): DrizzleSelectWithRelationsResult<TFields, TRelations>;
@@ -1598,14 +1670,31 @@ export function generateSelectQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: SelectQueryParams<TSchema>,
+  parsed: SelectQueryPayload<TSchema>,
   config: {
+    /**
+     * Factory that receives the generated select shape and must return a Drizzle
+     * query builder (e.g. `db.select(select).from(table)`).
+     */
     buildQuery: (
       selectShape: DrizzleSelectShape<NoInfer<TColumn>>,
     ) => DrizzleAutoQuery<InferFieldsData<NoInfer<TFields>>[]>;
+    /**
+     * Map from allowed field paths to Drizzle column references.
+     */
     fields: TFields & DrizzleFieldMap<TSchema, TColumn>;
+    /** Relations to fetch as separate queries and assemble into parent rows. */
     relations?: TRelations;
+    /**
+     * When `true` (default), throws if a requested field has no mapping in `fields`.
+     * Set to `false` to silently ignore unmapped fields.
+     */
     strictFieldMapping?: boolean;
+    /**
+     * Custom alias generator for select keys. Receives a dotted field path
+     * (e.g. `"posts.title"`) and must return a valid SQL alias.
+     * Defaults to replacing dots with underscores (`"posts_title"`).
+     */
     selectAlias?: (fieldPath: string) => string;
   },
 ): DrizzleSelectWithRelationsResult<TFields, TRelations, SelectResponseType> {
@@ -1616,7 +1705,9 @@ export function generateSelectQuery<
   const relationNames = relations.map((r) => r.relationName);
 
   // ── Partition select paths ──────────────────────────────────────
-  const mainSelect = parsed.select.filter((fp) => !belongsToAnyRelation(`${fp}`, relationNames));
+  const mainSelect = parsed.select.fields.filter(
+    (fp) => !belongsToAnyRelation(`${fp}`, relationNames),
+  );
 
   // ── Build the main select shape ─────────────────────────────────
   const mainSelectShape = buildSelectShapeInternal(
@@ -1644,7 +1735,7 @@ export function generateSelectQuery<
   let query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
 
   // When responseType is 'one', limit to a single row.
-  if (parsed.responseType === 'one') {
+  if (parsed.select.responseType === 'one') {
     query = query.limit(1);
   }
 
@@ -1652,7 +1743,7 @@ export function generateSelectQuery<
   const scopeOperators = createPgDrizzleOperators();
 
   // ── Build relation queries (select-only, no filters/sort) ───────
-  const selectPaths = parsed.select.map(String);
+  const selectPaths = parsed.select.fields.map(String);
   const relationQueries = relations.map((relation) =>
     buildSelectOnlyRelationQuery(selectPaths, relation, aliasBuilder, strictFieldMapping),
   );
@@ -1698,7 +1789,7 @@ export function generateSelectQuery<
       assembleDrizzleRelations(mainRows, scopedQueries, scopedRelationResults),
     );
 
-    if (parsed.responseType === 'one') {
+    if (parsed.select.responseType === 'one') {
       const data: ExecuteData = rows[0] ?? null;
       return { data };
     }
