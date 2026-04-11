@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.3.1...v3.0.0) (2026-04-11)
+
+
+### Features
+
+* add generic to handle select response types ([3464d27](https://github.com/nolway/zod-paginate-drizzle/commit/3464d27be342997c0a639762bb513948f85f3fe4))
+
+
+### Miscellaneous Chores
+
+* release 3.0.0 ([845609c](https://github.com/nolway/zod-paginate-drizzle/commit/845609c22ec4ffe1a2db7615056834233ae0bcc4))
+
 ## [2.3.1](https://github.com/nolway/zod-paginate-drizzle/compare/v2.3.0...v2.3.1) (2026-04-11)
 
 
