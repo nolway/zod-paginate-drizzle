@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import type { DataSchema, PaginationQueryParams, SelectQueryPayload } from 'zod-paginate';
+import type { DataSchema, PaginationPayload, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   defineRelation,
@@ -10,10 +10,8 @@ import {
 import { posts, users } from './schemas';
 import { db, seedUsers, setupPg } from './setup';
 
-function toParsed(
-  pagination: PaginationQueryParams<DataSchema>['pagination'],
-): PaginationQueryParams<DataSchema> {
-  return { pagination };
+function toParsed(pagination: PaginationPayload<DataSchema>): PaginationPayload<DataSchema> {
+  return pagination;
 }
 
 describe('PostgreSQL integration', () => {

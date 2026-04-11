@@ -1,7 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import type { DataSchema, PaginationQueryParams, SelectQueryPayload } from 'zod-paginate';
+import type { DataSchema, PaginationPayload, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   generatePaginationQuery,
@@ -64,10 +64,8 @@ class QuerySpy {
   }
 }
 
-function toParsed(
-  pagination: PaginationQueryParams<DataSchema>['pagination'],
-): PaginationQueryParams<DataSchema> {
-  return { pagination };
+function toParsed(pagination: PaginationPayload<DataSchema>): PaginationPayload<DataSchema> {
+  return pagination;
 }
 
 describe('createPgDrizzleOperators', () => {
@@ -2074,9 +2072,9 @@ describe('assembleDrizzleRelations', () => {
 
 describe('buildLimitOffsetResponseMeta', () => {
   function toLimitOffsetParsed(
-    pagination: PaginationQueryParams<DataSchema, 'LIMIT_OFFSET'>['pagination'],
-  ): PaginationQueryParams<DataSchema, 'LIMIT_OFFSET'> {
-    return { pagination };
+    pagination: PaginationPayload<DataSchema, 'LIMIT_OFFSET'>,
+  ): PaginationPayload<DataSchema, 'LIMIT_OFFSET'> {
+    return pagination;
   }
 
   it('computes totalPages and currentPage', () => {
@@ -2142,9 +2140,9 @@ describe('buildLimitOffsetResponseMeta', () => {
 
 describe('buildCursorResponseMeta', () => {
   function toCursorParsed(
-    pagination: PaginationQueryParams<DataSchema, 'CURSOR'>['pagination'],
-  ): PaginationQueryParams<DataSchema, 'CURSOR'> {
-    return { pagination };
+    pagination: PaginationPayload<DataSchema, 'CURSOR'>,
+  ): PaginationPayload<DataSchema, 'CURSOR'> {
+    return pagination;
   }
 
   it('extracts cursor from last row', () => {

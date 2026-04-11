@@ -23,7 +23,7 @@ import type {
   CursorPaginationResponseMeta,
   DataSchema,
   LimitOffsetPaginationResponseMeta,
-  PaginationQueryParams,
+  PaginationPayload,
   PaginationType,
   SelectQueryPayload,
   SelectResponseType,
@@ -772,13 +772,11 @@ function buildDrizzleClausesFromPagination<
   TWhereExpr,
   TOrderByExpr,
 >(
-  parsed: PaginationQueryParams<TSchema>,
+  pagination: PaginationPayload<TSchema>,
   config: BuildDrizzleClausesConfig<TSchema, TColumn, TWhereExpr, TOrderByExpr>,
 ): DrizzlePaginationClauses<TColumn, TWhereExpr, TOrderByExpr> {
   const strictFieldMapping = config.strictFieldMapping ?? true;
   const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
-
-  const pagination = parsed.pagination;
 
   const select = buildSelectShapeInternal(
     pagination.select ? pagination.select.map((fieldPath) => `${fieldPath}`) : [],
@@ -869,7 +867,7 @@ export function applyDrizzlePaginationOnQuery<
   TColumn extends DrizzleSqlColumn,
   TFields extends Record<string, TColumn>,
 >(
-  parsed: PaginationQueryParams<TSchema>,
+  parsed: PaginationPayload<TSchema>,
   config: {
     dialect: DrizzleDialect;
     buildQuery: (
@@ -1125,7 +1123,7 @@ function buildRelationScope(
  * the select/filter/sort fields prefixed with the relation name.
  */
 function buildSingleRelationQuery(
-  pagination: PaginationQueryParams<DataSchema>['pagination'],
+  pagination: PaginationPayload<DataSchema>,
   relation: AnyDrizzleRelation,
   operators: DrizzleSqlOperatorSet,
   selectAlias: (fieldPath: string) => string,
@@ -1375,7 +1373,7 @@ export function generatePaginationQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: PaginationQueryParams<TSchema, 'LIMIT_OFFSET'>,
+  parsed: PaginationPayload<TSchema, 'LIMIT_OFFSET'>,
   config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
 ): DrizzlePaginationResult<TColumn, TFields, TRelations, 'LIMIT_OFFSET'>;
 
@@ -1385,7 +1383,7 @@ export function generatePaginationQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: PaginationQueryParams<TSchema, 'CURSOR'>,
+  parsed: PaginationPayload<TSchema, 'CURSOR'>,
   config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
 ): DrizzlePaginationResult<TColumn, TFields, TRelations, 'CURSOR'>;
 
@@ -1396,7 +1394,7 @@ export function generatePaginationQuery<
   const TRelations extends readonly AnyDrizzleRelation[],
   TType extends PaginationType = PaginationType,
 >(
-  parsed: PaginationQueryParams<TSchema, TType>,
+  parsed: PaginationPayload<TSchema, TType>,
   config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
 ): DrizzlePaginationResult<TColumn, TFields, TRelations, TType>;
 
@@ -1406,7 +1404,7 @@ export function generatePaginationQuery<
   TFields extends Record<string, TColumn>,
   const TRelations extends readonly AnyDrizzleRelation[],
 >(
-  parsed: PaginationQueryParams<TSchema>,
+  parsed: PaginationPayload<TSchema>,
   config: GeneratePaginationQueryConfig<TSchema, TColumn, TFields, TRelations>,
 ): DrizzlePaginationResult<TColumn, TFields, TRelations> {
   const operators = config.operators ?? getOperatorsForDialect(config.dialect);
@@ -1417,7 +1415,7 @@ export function generatePaginationQuery<
   const relationNames = relations.map((r) => r.relationName);
 
   // ── Partition the parsed pagination ─────────────────────────────
-  const pagination = parsed.pagination;
+  const pagination = parsed;
 
   // Remove relation-prefixed paths from the main select.
   const mainSelect = pagination.select
@@ -1451,22 +1449,19 @@ export function generatePaginationQuery<
   }
 
   // Build the main pagination clauses (without relation fields).
-  const mainPagination: PaginationQueryParams<DataSchema>['pagination'] = {
+  const mainPagination: PaginationPayload<DataSchema> = {
     ...pagination,
     select: mainSelect,
     filters: mainFilters,
     sortBy: mainSortBy && mainSortBy.length > 0 ? mainSortBy : undefined,
   };
 
-  const clauses = buildDrizzleClausesFromPagination<TSchema, TColumn, SQL, SQL>(
-    { pagination: mainPagination } satisfies PaginationQueryParams<DataSchema>,
-    {
-      fields: config.fields,
-      operators,
-      selectAlias: aliasBuilder,
-      strictFieldMapping,
-    },
-  );
+  const clauses = buildDrizzleClausesFromPagination<TSchema, TColumn, SQL, SQL>(mainPagination, {
+    fields: config.fields,
+    operators,
+    selectAlias: aliasBuilder,
+    strictFieldMapping,
+  });
 
   // Inject parent key columns into the select shape.
   Object.assign(clauses.select, parentKeyFields);
@@ -1519,7 +1514,7 @@ export function generatePaginationQuery<
   const execute = async (): Promise<ExecuteResult> => {
     // Start count query early so it runs in parallel with the main query.
     const countPromise: PromiseLike<number> =
-      parsed.pagination.type === 'LIMIT_OFFSET'
+      parsed.type === 'LIMIT_OFFSET'
         ? executeCountQuery(config.buildQuery, clauses.where)
         : Promise.resolve(0);
 
@@ -1553,23 +1548,15 @@ export function generatePaginationQuery<
     );
 
     // Build pagination metadata depending on the type.
-    if (parsed.pagination.type === 'LIMIT_OFFSET') {
+    if (parsed.type === 'LIMIT_OFFSET') {
       const totalItems = await countPromise;
 
-      const paginationMeta = buildLimitOffsetResponseMeta(
-        { pagination: parsed.pagination },
-        totalItems,
-      );
+      const paginationMeta = buildLimitOffsetResponseMeta(parsed, totalItems);
       return { data, pagination: paginationMeta };
     }
 
     // CURSOR
-    const paginationMeta = buildCursorResponseMeta(
-      { pagination: parsed.pagination },
-      mainRows,
-      undefined,
-      aliasBuilder,
-    );
+    const paginationMeta = buildCursorResponseMeta(parsed, mainRows, undefined, aliasBuilder);
     return { data, pagination: paginationMeta };
   };
 
@@ -1963,10 +1950,10 @@ export function assembleDrizzleRelations(
  * ```
  */
 export function buildLimitOffsetResponseMeta<TSchema extends DataSchema>(
-  parsed: PaginationQueryParams<TSchema, 'LIMIT_OFFSET'>,
+  parsed: PaginationPayload<TSchema, 'LIMIT_OFFSET'>,
   totalItems: number,
 ): LimitOffsetPaginationResponseMeta {
-  const pagination = parsed.pagination;
+  const pagination = parsed;
   const safePage = typeof pagination.page === 'number' && pagination.page > 0 ? pagination.page : 1;
   const totalPages = pagination.limit > 0 ? Math.ceil(totalItems / pagination.limit) : 0;
 
@@ -2005,12 +1992,12 @@ export function buildLimitOffsetResponseMeta<TSchema extends DataSchema>(
  * ```
  */
 export function buildCursorResponseMeta<TSchema extends DataSchema>(
-  parsed: PaginationQueryParams<TSchema, 'CURSOR'>,
+  parsed: PaginationPayload<TSchema, 'CURSOR'>,
   rows: Record<string, unknown>[],
   cursorField?: string,
   selectAlias?: (fieldPath: string) => string,
 ): CursorPaginationResponseMeta {
-  const pagination = parsed.pagination;
+  const pagination = parsed;
   const aliasBuilder = selectAlias ?? defaultSelectAlias;
   const resolvedCursorField = cursorField ?? aliasBuilder(`${pagination.cursorProperty}`);
 
