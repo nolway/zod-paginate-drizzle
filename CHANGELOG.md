@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.1](https://github.com/nolway/zod-paginate-drizzle/compare/v2.3.0...v2.3.1) (2026-04-11)
+
+
+### Bug Fixes
+
+* use directly PaginationPayload on generatePaginationQuery ([1baad4a](https://github.com/nolway/zod-paginate-drizzle/commit/1baad4ab80d010e957a155ab59e318df52216172))
+
+
+### Miscellaneous Chores
+
+* release 2.3.1 ([9e298fa](https://github.com/nolway/zod-paginate-drizzle/commit/9e298fa4c34c2d0619798b16c72e6c2d4e436a5b))
+
 ## [2.3.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.2.0...v2.3.0) (2026-04-11)
 
 
