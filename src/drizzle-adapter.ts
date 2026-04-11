@@ -433,9 +433,14 @@ export interface DrizzleSelectWithRelationsResult<
   ) => InferAssembledRow<TFields, TRelations>[];
   /**
    * Executes **all** queries (main + relations), assembles nested objects
-   * and returns `{ data }`.
+   * and returns `{ data }` (or `null` when `responseType` is `'one'` and no
+   * row is found).
    */
-  execute: () => Promise<SelectResponse<TSchema, AllowedPath<TSchema>, TResponseType>>;
+  execute: () => Promise<
+    TResponseType extends 'one'
+      ? SelectResponse<TSchema, AllowedPath<TSchema>, 'one'> | null
+      : SelectResponse<TSchema, AllowedPath<TSchema>, TResponseType>
+  >;
 }
 
 export type DrizzleSelectShape<TColumn> = Record<string, TColumn>;
@@ -1747,7 +1752,7 @@ export function generateSelectQuery<
       assembleDrizzleRelations(mainRows, relationQueries, relationResults),
     );
 
-  const execute = async (): Promise<ExecuteResult> => {
+  const execute = async (): Promise<ExecuteResult | null> => {
     // Execute main query first to obtain parent IDs for relation scoping.
     const mainRows: Record<string, unknown>[] = await query;
 
@@ -1777,8 +1782,10 @@ export function generateSelectQuery<
     );
 
     if (parsed.responseType === 'one') {
+      const row = rows[0];
+      if (!row) return null;
       // @ts-expect-error -- InferAssembledRow is structurally compatible with SelectResponseData at runtime
-      const data: ExecuteResult['data'] = rows[0] ?? null;
+      const data: ExecuteResult['data'] = row;
       return { data };
     }
 

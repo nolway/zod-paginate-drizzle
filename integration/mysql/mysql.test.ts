@@ -665,9 +665,9 @@ describe('MySQL integration', () => {
       fields: { id: users.id, name: users.name },
     });
 
-    const { data } = await result.execute();
+    const executeResult = await result.execute();
 
-    expect(data).toBeNull();
+    expect(executeResult).toBeNull();
   });
 
   it('generateSelectQuery with responseType "one" and relations returns a single assembled object', async () => {

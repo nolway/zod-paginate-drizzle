@@ -117,12 +117,12 @@ const query = generateSelectQuery(parsed, {
   fields: { id: users.id, name: users.name, email: users.email },
 });
 
-const { data } = await query.execute();
-// data = { id: 1, name: 'Alice', email: 'alice@test.com' }
-// or data = null if no row is found
+const result = await query.execute();
+// result = { data: { id: 1, name: 'Alice', email: 'alice@test.com' } }
+// or result = null if no row is found
 ```
 
-When `responseType` is `'many'` (the default) or omitted, `data` remains an array as before.
+When `responseType` is `'many'` (the default) or omitted, `execute()` returns `{ data: T[] }` as before.
 
 ### Without relations
 
@@ -234,7 +234,7 @@ const { pagination } = await query.execute();
 
 Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPayload` from `zod-paginate` (only `fields` and `responseType` — no filters, sorting, or pagination).
 
-When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `SelectResponse<TSchema, ..., 'one'>` (single object or `null`). Otherwise it returns `SelectResponse<TSchema, ..., 'many'>` (array).
+When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `SelectResponse<TSchema, ..., 'one'> | null` (`null` when no row is found). Otherwise it returns `SelectResponse<TSchema, ..., 'many'>` (array).
 
 **Config**:
 
@@ -253,7 +253,7 @@ When `parsed.responseType` is `'one'`, the query is automatically limited to 1 r
 | `query` | `DrizzleDynamicQuery` | The main Drizzle query (awaitable) |
 | `relationQueries` | `DrizzleRelationQuery[]` | Prepared relation queries |
 | `assemble` | `(mainRows, relationResults) => rows` | Manual row assembler |
-| `execute` | `() => Promise<SelectResponse<TSchema>>` | Runs everything and returns `{ data }`. When `responseType` is `'one'`: `data` is a single object or `null`. Otherwise: `data` is an array. |
+| `execute` | `() => Promise<SelectResponse<TSchema> \| null>` | Runs everything and returns `{ data }`. When `responseType` is `'one'`: returns `{ data }` with a single object, or `null` if no row is found. Otherwise: `data` is an array. |
 
 ### `defineRelation(config)`
 

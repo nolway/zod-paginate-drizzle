@@ -1602,9 +1602,9 @@ describe('generateSelectQuery', () => {
       fields: { name: users.name },
     });
 
-    const { data } = await result.execute();
+    const executeResult = await result.execute();
 
-    expect(data).toBeNull();
+    expect(executeResult).toBeNull();
   });
 
   it('execute() returns an array when responseType is "many"', async () => {
