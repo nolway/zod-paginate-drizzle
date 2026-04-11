@@ -1,6 +1,6 @@
 {
   "name": "zod-paginate-drizzle",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Drizzle adapter for zod-paginate.",
   "keywords": [
     "zod",
