@@ -1205,7 +1205,7 @@ describe('generatePaginationQuery', () => {
 
 describe('generateSelectQuery', () => {
   function toSelectParsed(select: string[]): SelectQueryPayload<DataSchema> {
-    return { select: { fields: select } };
+    return { fields: select, responseType: 'many' };
   }
 
   it('partitions select paths between main query and relations', () => {
@@ -1520,7 +1520,8 @@ describe('generateSelectQuery', () => {
     const mainQuery = new QuerySpy();
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: { fields: ['name'], responseType: 'one' },
+      fields: ['name'],
+      responseType: 'one',
     };
 
     generateSelectQuery(parsed, {
@@ -1535,7 +1536,8 @@ describe('generateSelectQuery', () => {
     const mainQuery = new QuerySpy();
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: { fields: ['name'], responseType: 'many' },
+      fields: ['name'],
+      responseType: 'many',
     };
 
     generateSelectQuery(parsed, {
@@ -1569,7 +1571,8 @@ describe('generateSelectQuery', () => {
     );
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: { fields: ['name'], responseType: 'one' },
+      fields: ['name'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -1590,7 +1593,8 @@ describe('generateSelectQuery', () => {
     );
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: { fields: ['name'], responseType: 'one' },
+      fields: ['name'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -1613,7 +1617,8 @@ describe('generateSelectQuery', () => {
     );
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: { fields: ['name'], responseType: 'many' },
+      fields: ['name'],
+      responseType: 'many',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -1641,10 +1646,8 @@ describe('generateSelectQuery', () => {
     );
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: {
-        fields: ['name', 'posts.title'],
-        responseType: 'one',
-      },
+      fields: ['name', 'posts.title'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {

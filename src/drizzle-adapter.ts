@@ -26,6 +26,7 @@ import type {
   PaginationPayload,
   PaginationType,
   SelectQueryPayload,
+  SelectResponse,
   SelectResponseType,
   SortDirection,
   WhereNode,
@@ -413,6 +414,7 @@ export type InferSelectExecuteData<
  * clauses. Includes `assemble` and `execute` helpers.
  */
 export interface DrizzleSelectWithRelationsResult<
+  TSchema extends DataSchema = DataSchema,
   TFields extends Record<string, unknown> = Record<string, unknown>,
   TRelations extends readonly AnyDrizzleRelation[] = readonly AnyDrizzleRelation[],
   TResponseType extends SelectResponseType = 'many',
@@ -433,7 +435,7 @@ export interface DrizzleSelectWithRelationsResult<
    * Executes **all** queries (main + relations), assembles nested objects
    * and returns `{ data }`.
    */
-  execute: () => Promise<{ data: InferSelectExecuteData<TFields, TRelations, TResponseType> }>;
+  execute: () => Promise<SelectResponse<TSchema, AllowedPath<TSchema>, TResponseType>>;
 }
 
 export type DrizzleSelectShape<TColumn> = Record<string, TColumn>;
@@ -1626,7 +1628,7 @@ export function generateSelectQuery<
     /** Custom alias generator for select keys. Defaults to replacing dots with underscores. */
     selectAlias?: (fieldPath: string) => string;
   },
-): DrizzleSelectWithRelationsResult<TFields, TRelations, 'one'>;
+): DrizzleSelectWithRelationsResult<TSchema, TFields, TRelations, 'one'>;
 
 export function generateSelectQuery<
   TSchema extends DataSchema,
@@ -1649,7 +1651,7 @@ export function generateSelectQuery<
     /** Custom alias generator for select keys. Defaults to replacing dots with underscores. */
     selectAlias?: (fieldPath: string) => string;
   },
-): DrizzleSelectWithRelationsResult<TFields, TRelations>;
+): DrizzleSelectWithRelationsResult<TSchema, TFields, TRelations>;
 
 export function generateSelectQuery<
   TSchema extends DataSchema,
@@ -1684,7 +1686,7 @@ export function generateSelectQuery<
      */
     selectAlias?: (fieldPath: string) => string;
   },
-): DrizzleSelectWithRelationsResult<TFields, TRelations, SelectResponseType> {
+): DrizzleSelectWithRelationsResult<TSchema, TFields, TRelations, SelectResponseType> {
   const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
   const strictFieldMapping = config.strictFieldMapping ?? true;
   // @ts-expect-error -- empty array is a valid runtime fallback for TRelations
@@ -1692,9 +1694,7 @@ export function generateSelectQuery<
   const relationNames = relations.map((r) => r.relationName);
 
   // ── Partition select paths ──────────────────────────────────────
-  const mainSelect = parsed.select.fields.filter(
-    (fp) => !belongsToAnyRelation(`${fp}`, relationNames),
-  );
+  const mainSelect = parsed.fields.filter((fp) => !belongsToAnyRelation(`${fp}`, relationNames));
 
   // ── Build the main select shape ─────────────────────────────────
   const mainSelectShape = buildSelectShapeInternal(
@@ -1722,7 +1722,7 @@ export function generateSelectQuery<
   let query: DrizzleDynamicQuery = config.buildQuery(mainSelectShape).$dynamic();
 
   // When responseType is 'one', limit to a single row.
-  if (parsed.select.responseType === 'one') {
+  if (parsed.responseType === 'one') {
     query = query.limit(1);
   }
 
@@ -1730,14 +1730,14 @@ export function generateSelectQuery<
   const scopeOperators = createPgDrizzleOperators();
 
   // ── Build relation queries (select-only, no filters/sort) ───────
-  const selectPaths = parsed.select.fields.map(String);
+  const selectPaths = parsed.fields.map(String);
   const relationQueries = relations.map((relation) =>
     buildSelectOnlyRelationQuery(selectPaths, relation, aliasBuilder, strictFieldMapping),
   );
 
   // ── assemble / execute helpers ──────────────────────────────────
   type AssembledRow = InferAssembledRow<TFields, TRelations>;
-  type ExecuteData = InferSelectExecuteData<TFields, TRelations, SelectResponseType>;
+  type ExecuteResult = SelectResponse<TSchema, AllowedPath<TSchema>, SelectResponseType>;
 
   const assemble = (
     mainRows: Record<string, unknown>[],
@@ -1747,7 +1747,7 @@ export function generateSelectQuery<
       assembleDrizzleRelations(mainRows, relationQueries, relationResults),
     );
 
-  const execute = async (): Promise<{ data: ExecuteData }> => {
+  const execute = async (): Promise<ExecuteResult> => {
     // Execute main query first to obtain parent IDs for relation scoping.
     const mainRows: Record<string, unknown>[] = await query;
 
@@ -1776,12 +1776,14 @@ export function generateSelectQuery<
       assembleDrizzleRelations(mainRows, scopedQueries, scopedRelationResults),
     );
 
-    if (parsed.select.responseType === 'one') {
-      const data: ExecuteData = rows[0] ?? null;
+    if (parsed.responseType === 'one') {
+      // @ts-expect-error -- InferAssembledRow is structurally compatible with SelectResponseData at runtime
+      const data: ExecuteResult['data'] = rows[0] ?? null;
       return { data };
     }
 
-    const data: ExecuteData = rows;
+    // @ts-expect-error -- InferAssembledRow[] is structurally compatible with SelectResponseData at runtime
+    const data: ExecuteResult['data'] = rows;
     return { data };
   };
 

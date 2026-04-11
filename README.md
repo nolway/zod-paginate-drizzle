@@ -6,7 +6,7 @@ This library is **not standalone** — it requires [`zod-paginate`](https://gith
 
 ## Features
 
-- Works with parsed `PaginationQueryParams` from `zod-paginate`
+- Works with parsed `PaginationPayload` from `zod-paginate`
 - Supports PostgreSQL and MySQL dialect defaults
 - Converts filter trees (`and` / `or`) into Drizzle expressions
 - Handles field mapping with strict or permissive mode
@@ -34,23 +34,21 @@ You will also need:
 ```ts
 import { generatePaginationQuery, defineRelation } from 'zod-paginate-drizzle';
 
-// `parsed` is the validated output from zod-paginate
+// `parsed` is the validated output from zod-paginate (PaginationPayload)
 const parsed = {
-  pagination: {
-    type: 'LIMIT_OFFSET',
-    page: 1,
-    limit: 20,
-    select: ['id', 'name', 'posts.id', 'posts.title'],
-    sortBy: [{ property: 'id', direction: 'ASC' }],
-    filters: {
-      type: 'filter',
-      field: 'status',
-      condition: { group: 'status', op: '$eq', value: 'ACTIVE' },
-    },
+  type: 'LIMIT_OFFSET',
+  page: 1,
+  limit: 20,
+  select: ['id', 'name', 'posts.id', 'posts.title'],
+  sortBy: [{ property: 'id', direction: 'ASC' }],
+  filters: {
+    type: 'filter',
+    field: 'status',
+    condition: { group: 'status', op: '$eq', value: 'ACTIVE' },
   },
 };
 
-const result = generatePaginationQuery(parsed, {
+const query = generatePaginationQuery(parsed, {
   dialect: 'pg',
   buildQuery: (select) => db.select(select).from(users),
   fields: { id: users.id, name: users.name, status: users.status },
@@ -67,7 +65,7 @@ const result = generatePaginationQuery(parsed, {
 
 // execute() runs the main query + all relation queries, assembles the result,
 // and computes pagination metadata automatically
-const { data, pagination } = await result.execute();
+const { data, pagination } = await query.execute();
 
 // data[0].posts is an array of { id, title }
 // pagination is typed as LimitOffsetPaginationResponseMeta
@@ -82,10 +80,11 @@ When you only need to select fields (no filters, sorting, or pagination), use `g
 import { generateSelectQuery, defineRelation } from 'zod-paginate-drizzle';
 
 const parsed = {
-  select: { fields: ['id', 'name', 'posts.title'] },
+  fields: ['id', 'name', 'posts.title'],
+  responseType: 'many',
 };
 
-const result = generateSelectQuery(parsed, {
+const query = generateSelectQuery(parsed, {
   buildQuery: (select) => db.select(select).from(users),
   fields: { id: users.id, name: users.name },
   relations: [
@@ -99,7 +98,7 @@ const result = generateSelectQuery(parsed, {
   ],
 });
 
-const { data } = await result.execute();
+const { data } = await query.execute();
 // data[0].posts is an array of { title }
 ```
 
@@ -109,15 +108,16 @@ When `zod-paginate`'s `select()` is configured with `responseType: 'one'`, the p
 
 ```ts
 const parsed = {
-  select: { fields: ['id', 'name', 'email'], responseType: 'one' },  // ← from zod-paginate's select({ responseType: 'one' })
+  fields: ['id', 'name', 'email'],
+  responseType: 'one',  // ← from zod-paginate's select({ responseType: 'one' })
 };
 
-const result = generateSelectQuery(parsed, {
+const query = generateSelectQuery(parsed, {
   buildQuery: (select) => db.select(select).from(users),
   fields: { id: users.id, name: users.name, email: users.email },
 });
 
-const { data } = await result.execute();
+const { data } = await query.execute();
 // data = { id: 1, name: 'Alice', email: 'alice@test.com' }
 // or data = null if no row is found
 ```
@@ -129,13 +129,13 @@ When `responseType` is `'many'` (the default) or omitted, `data` remains an arra
 `relations` is optional — simply omit it:
 
 ```ts
-const result = generatePaginationQuery(parsed, {
+const query = generatePaginationQuery(parsed, {
   dialect: 'pg',
   buildQuery: (select) => db.select(select).from(users),
   fields: { id: users.id, name: users.name, email: users.email },
 });
 
-const { data, pagination } = await result.execute();
+const { data, pagination } = await query.execute();
 ```
 
 ### Manual execution
@@ -143,22 +143,22 @@ const { data, pagination } = await result.execute();
 If you need more control, you can use the lower-level properties instead of `execute()`:
 
 ```ts
-const result = generatePaginationQuery(parsed, config);
+const query = generatePaginationQuery(parsed, config);
 
 // Execute queries yourself
 const [mainRows, ...relationRows] = await Promise.all([
-  result.query,
-  ...result.relationQueries.map((r) => r.query),
+  query.query,
+  ...query.relationQueries.map((r) => r.query),
 ]);
 
 // Assemble relations manually
-const data = result.assemble(mainRows, relationRows);
+const data = query.assemble(mainRows, relationRows);
 
 // Access raw clauses
-result.clauses.where;   // SQL | undefined
-result.clauses.orderBy; // SQL[]
-result.clauses.limit;   // number | undefined
-result.clauses.offset;  // number | undefined
+query.clauses.where;   // SQL | undefined
+query.clauses.orderBy; // SQL[]
+query.clauses.limit;   // number | undefined
+query.clauses.offset;  // number | undefined
 ```
 
 ## Working with joins
@@ -172,7 +172,7 @@ const fields = {
   postTitle: posts.title,
 };
 
-const result = generatePaginationQuery(parsed, {
+const query = generatePaginationQuery(parsed, {
   dialect: 'pg',
   fields,
   buildQuery: (select) =>
@@ -183,7 +183,7 @@ const result = generatePaginationQuery(parsed, {
   relations: [],
 });
 
-const { data } = await result.execute();
+const { data } = await query.execute();
 ```
 
 ## API
@@ -196,14 +196,14 @@ The return type is **narrowed based on the pagination type** in `parsed`:
 
 ```ts
 // When parsed has type: 'LIMIT_OFFSET'
-const result = generatePaginationQuery(parsed, config);
-const { pagination } = await result.execute();
+const query = generatePaginationQuery(parsed, config);
+const { pagination } = await query.execute();
 // pagination: LimitOffsetPaginationResponseMeta
 //   → { totalItems, totalPages, currentPage, itemsPerPage }
 
 // When parsed has type: 'CURSOR'
-const result = generatePaginationQuery(parsed, config);
-const { pagination } = await result.execute();
+const query = generatePaginationQuery(parsed, config);
+const { pagination } = await query.execute();
 // pagination: CursorPaginationResponseMeta
 //   → { itemsPerPage, cursor, sortBy, filter }
 ```
@@ -232,9 +232,9 @@ const { pagination } = await result.execute();
 
 ### `generateSelectQuery(parsed, config)`
 
-Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPayload` from `zod-paginate` (only a `select` array — no filters, sorting, or pagination).
+Select-only counterpart of `generatePaginationQuery`. Works with `SelectQueryPayload` from `zod-paginate` (only `fields` and `responseType` — no filters, sorting, or pagination).
 
-When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `{ data: T | null }` instead of `{ data: T[] }`.
+When `parsed.responseType` is `'one'`, the query is automatically limited to 1 row and `execute()` returns `SelectResponse<TSchema, ..., 'one'>` (single object or `null`). Otherwise it returns `SelectResponse<TSchema, ..., 'many'>` (array).
 
 **Config**:
 
@@ -253,7 +253,7 @@ When `parsed.responseType` is `'one'`, the query is automatically limited to 1 r
 | `query` | `DrizzleDynamicQuery` | The main Drizzle query (awaitable) |
 | `relationQueries` | `DrizzleRelationQuery[]` | Prepared relation queries |
 | `assemble` | `(mainRows, relationResults) => rows` | Manual row assembler |
-| `execute` | `() => Promise<{ data }>` | Runs everything and returns assembled data. When `responseType` is `'one'`: `data` is a single object or `null`. Otherwise: `data` is an array. |
+| `execute` | `() => Promise<SelectResponse<TSchema>>` | Runs everything and returns `{ data }`. When `responseType` is `'one'`: `data` is a single object or `null`. Otherwise: `data` is an array. |
 
 ### `defineRelation(config)`
 
@@ -287,7 +287,7 @@ const profileRelation = defineRelation({
   buildQuery: (select) => db.select(select).from(profiles),
 });
 
-const { data } = await result.execute();
+const { data } = await query.execute();
 // data[0].profile is { bio, avatar } | null  (not an array)
 ```
 
@@ -310,7 +310,7 @@ const recentPostsRelation = defineRelation({
   buildQuery: (select) => db.select(select).from(posts),
 });
 
-const { data } = await result.execute();
+const { data } = await query.execute();
 // data[0].posts has at most 5 items, ordered by createdAt DESC
 ```
 

@@ -635,10 +635,8 @@ describe('PostgreSQL integration', () => {
     await seedUsers();
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: {
-        fields: ['id', 'name', 'email'],
-        responseType: 'one',
-      },
+      fields: ['id', 'name', 'email'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -658,10 +656,8 @@ describe('PostgreSQL integration', () => {
     // No seed — empty table
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: {
-        fields: ['id', 'name'],
-        responseType: 'one',
-      },
+      fields: ['id', 'name'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -682,10 +678,8 @@ describe('PostgreSQL integration', () => {
     `);
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: {
-        fields: ['id', 'name', 'posts.id', 'posts.title'],
-        responseType: 'one',
-      },
+      fields: ['id', 'name', 'posts.id', 'posts.title'],
+      responseType: 'one',
     };
 
     const result = generateSelectQuery(parsed, {
@@ -714,9 +708,8 @@ describe('PostgreSQL integration', () => {
     await seedUsers();
 
     const parsed: SelectQueryPayload<DataSchema> = {
-      select: {
-        fields: ['id', 'name'],
-      },
+      fields: ['id', 'name'],
+      responseType: 'many',
     };
 
     const result = generateSelectQuery(parsed, {
