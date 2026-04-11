@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.2.0...v2.3.0) (2026-04-11)
+
+
+### Features
+
+* implement new select type ([fba69a5](https://github.com/nolway/zod-paginate-drizzle/commit/fba69a5d7fd6442fa66964644bd88a6aa0e4df59))
+
+
+### Miscellaneous Chores
+
+* release 2.3.0 ([3271d32](https://github.com/nolway/zod-paginate-drizzle/commit/3271d32cac067af30a4e3034631b4a86a6299169))
+
 ## [2.2.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.1.0...v2.2.0) (2026-04-09)
 
 
