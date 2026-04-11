@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.1](https://github.com/nolway/zod-paginate-drizzle/compare/v3.0.0...v3.0.1) (2026-04-11)
+
+
+### Bug Fixes
+
+* return correctly null on response type one ([25e52e6](https://github.com/nolway/zod-paginate-drizzle/commit/25e52e65c25082333bf0db0e2c54c3ecab2b0778))
+
+
+### Miscellaneous Chores
+
+* release 3.0.1 ([adbb261](https://github.com/nolway/zod-paginate-drizzle/commit/adbb261adba9e8b3d65502c061c753bc56fa7763))
+
 ## [3.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v2.3.1...v3.0.0) (2026-04-11)
 
 
