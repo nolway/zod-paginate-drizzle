@@ -1964,7 +1964,8 @@ export function buildLimitOffsetResponseMeta<TSchema extends DataSchema>(
 ): LimitOffsetPaginationResponseMeta {
   const pagination = parsed;
   const safePage = typeof pagination.page === 'number' && pagination.page > 0 ? pagination.page : 1;
-  const totalPages = pagination.limit > 0 ? Math.ceil(totalItems / pagination.limit) : 0;
+  const totalPages =
+    pagination.limit > 0 ? Math.max(1, Math.ceil(totalItems / pagination.limit)) : 1;
 
   return {
     itemsPerPage: pagination.limit,

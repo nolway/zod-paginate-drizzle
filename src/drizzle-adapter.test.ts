@@ -2095,7 +2095,7 @@ describe('buildLimitOffsetResponseMeta', () => {
     expect(meta.totalPages).toBe(5);
   });
 
-  it('returns totalPages 0 when totalItems is 0', () => {
+  it('returns totalPages 1 when totalItems is 0', () => {
     const parsed = toLimitOffsetParsed({
       type: 'LIMIT_OFFSET',
       page: 1,
@@ -2104,7 +2104,7 @@ describe('buildLimitOffsetResponseMeta', () => {
 
     const meta = buildLimitOffsetResponseMeta(parsed, 0);
 
-    expect(meta.totalPages).toBe(0);
+    expect(meta.totalPages).toBe(1);
     expect(meta.totalItems).toBe(0);
     expect(meta.currentPage).toBe(1);
   });
