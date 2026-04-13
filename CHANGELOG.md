@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.2](https://github.com/nolway/zod-paginate-drizzle/compare/v3.0.1...v3.0.2) (2026-04-13)
+
+
+### Bug Fixes
+
+* change minimal totalPages to 1 when there are any data ([9d97cbd](https://github.com/nolway/zod-paginate-drizzle/commit/9d97cbd81c11dde91a382bad4bc7b1efef681be9))
+
+
+### Miscellaneous Chores
+
+* release 3.0.2 ([647cd36](https://github.com/nolway/zod-paginate-drizzle/commit/647cd36130a56ca4de7f547b5286de1d6607df16))
+
 ## [3.0.1](https://github.com/nolway/zod-paginate-drizzle/compare/v3.0.0...v3.0.1) (2026-04-11)
 
 
