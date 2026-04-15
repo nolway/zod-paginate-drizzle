@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v3.0.2...v4.0.0) (2026-04-15)
+
+
+### Bug Fixes
+
+* issues on leaf typing ([e435210](https://github.com/nolway/zod-paginate-drizzle/commit/e435210806f24a4318d0046e1566eae012d16298))
+
+
+### Miscellaneous Chores
+
+* release 4.0.0 ([76bd908](https://github.com/nolway/zod-paginate-drizzle/commit/76bd90896e59795efc12f72954d9b7358513f3b2))
+
 ## [3.0.2](https://github.com/nolway/zod-paginate-drizzle/compare/v3.0.1...v3.0.2) (2026-04-13)
 
 
