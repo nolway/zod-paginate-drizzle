@@ -1,7 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import type { PaginationPayload, SelectQueryPayload } from 'zod-paginate';
+import type { DataSchema, PaginationPayload, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   defineRelation,
@@ -11,22 +10,7 @@ import {
 import { users, posts } from './schemas';
 import { db, seedUsers, setupMysql } from './setup';
 
-/**
- * Concrete Zod schema covering all field paths used across integration tests.
- */
-const TestSchema = z.object({
-  id: z.number(),
-  name: z.string(),
-  email: z.string(),
-  age: z.number(),
-  status: z.string(),
-  userName: z.string(),
-  postTitle: z.string(),
-  posts: z.object({ id: z.number(), title: z.string() }),
-});
-type TestSchema = typeof TestSchema;
-
-function toParsed(pagination: PaginationPayload<TestSchema>): PaginationPayload<TestSchema> {
+function toParsed(pagination: PaginationPayload<DataSchema>): PaginationPayload<DataSchema> {
   return pagination;
 }
 
@@ -650,7 +634,7 @@ describe('MySQL integration', () => {
   it('generateSelectQuery with responseType "one" returns a single object', async () => {
     await seedUsers();
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['id', 'name', 'email'],
       responseType: 'one',
     };
@@ -671,7 +655,7 @@ describe('MySQL integration', () => {
   it('generateSelectQuery with responseType "one" returns null when no rows match', async () => {
     // No seed — empty table
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['id', 'name'],
       responseType: 'one',
     };
@@ -693,7 +677,7 @@ describe('MySQL integration', () => {
       INSERT INTO posts (title, author_id) VALUES ('Post A1', 1), ('Post A2', 1)
     `);
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['id', 'name', 'posts.id', 'posts.title'],
       responseType: 'one',
     };
@@ -723,7 +707,7 @@ describe('MySQL integration', () => {
   it('generateSelectQuery without responseType returns an array', async () => {
     await seedUsers();
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['id', 'name'],
       responseType: 'many',
     };

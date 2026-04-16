@@ -19,7 +19,6 @@ import {
 import type { Column, GetColumnData, SQL } from 'drizzle-orm';
 import type {
   AllowedPath,
-  AllowedSelectablePath,
   Condition,
   CursorPaginationResponseMeta,
   DataSchema,
@@ -439,8 +438,8 @@ export interface DrizzleSelectWithRelationsResult<
    */
   execute: () => Promise<
     TResponseType extends 'one'
-      ? SelectResponse<TSchema, AllowedSelectablePath<TSchema>, 'one'> | null
-      : SelectResponse<TSchema, AllowedSelectablePath<TSchema>, TResponseType>
+      ? SelectResponse<TSchema, AllowedPath<TSchema>, 'one'> | null
+      : SelectResponse<TSchema, AllowedPath<TSchema>, TResponseType>
   >;
 }
 
@@ -773,10 +772,6 @@ function directionToOrderExpr<TColumn, TOrderByExpr>(
 
 /**
  * Builds Drizzle-ready select, where, order, limit and offset clauses from parsed pagination.
- *
- * An optional `overrides` parameter allows callers to substitute select, filters
- * and sortBy without reconstructing the `PaginationPayload` object (which is a
- * conditional type that cannot be spread safely).
  */
 function buildDrizzleClausesFromPagination<
   TSchema extends DataSchema,
@@ -786,34 +781,33 @@ function buildDrizzleClausesFromPagination<
 >(
   pagination: PaginationPayload<TSchema>,
   config: BuildDrizzleClausesConfig<TSchema, TColumn, TWhereExpr, TOrderByExpr>,
-  overrides?: {
-    select?: readonly string[];
-    filters?: WhereNode;
-    sortBy?: readonly { property: string; direction: SortDirection }[];
-  },
 ): DrizzlePaginationClauses<TColumn, TWhereExpr, TOrderByExpr> {
   const strictFieldMapping = config.strictFieldMapping ?? true;
   const aliasBuilder = config.selectAlias ?? defaultSelectAlias;
 
-  const effectiveSelect = overrides && 'select' in overrides ? overrides.select : pagination.select;
-  const effectiveFilters =
-    overrides && 'filters' in overrides ? overrides.filters : pagination.filters;
-  const effectiveSortBy = overrides && 'sortBy' in overrides ? overrides.sortBy : pagination.sortBy;
-
   const select = buildSelectShapeInternal(
-    effectiveSelect ? effectiveSelect.map((fieldPath) => fieldPath) : [],
+    pagination.select ? pagination.select.map((fieldPath) => `${fieldPath}`) : [],
     config.fields,
     strictFieldMapping,
     aliasBuilder,
   );
 
-  let where = effectiveFilters
-    ? whereNodeToDrizzleExpr(effectiveFilters, config.fields, config.operators, strictFieldMapping)
+  let where = pagination.filters
+    ? whereNodeToDrizzleExpr(
+        pagination.filters,
+        config.fields,
+        config.operators,
+        strictFieldMapping,
+      )
     : undefined;
 
-  const orderBy = effectiveSortBy
+  const orderBy = pagination.sortBy
     ?.map((sortItem) => {
-      const mappedColumn = getMappedColumn(sortItem.property, config.fields, strictFieldMapping);
+      const mappedColumn = getMappedColumn(
+        `${sortItem.property}`,
+        config.fields,
+        strictFieldMapping,
+      );
       if (!mappedColumn) return undefined;
       return directionToOrderExpr(sortItem.direction, mappedColumn, config.operators);
     })
@@ -840,7 +834,7 @@ function buildDrizzleClausesFromPagination<
 
       if (cursorColumn) {
         // Determine direction from sortBy: if the cursor property has DESC → use "<", else ">".
-        const cursorSort = effectiveSortBy?.find((s) => s.property === cursorProperty);
+        const cursorSort = pagination.sortBy?.find((s) => `${s.property}` === cursorProperty);
         const cursorDirection = cursorSort?.direction ?? 'ASC';
         const cursorExpr =
           cursorDirection === 'DESC'
@@ -1462,20 +1456,19 @@ export function generatePaginationQuery<
   }
 
   // Build the main pagination clauses (without relation fields).
-  const clauses = buildDrizzleClausesFromPagination<TSchema, TColumn, SQL, SQL>(
-    pagination,
-    {
-      fields: config.fields,
-      operators,
-      selectAlias: aliasBuilder,
-      strictFieldMapping,
-    },
-    {
-      select: mainSelect,
-      filters: mainFilters,
-      sortBy: mainSortBy && mainSortBy.length > 0 ? mainSortBy : undefined,
-    },
-  );
+  const mainPagination: PaginationPayload<DataSchema> = {
+    ...pagination,
+    select: mainSelect,
+    filters: mainFilters,
+    sortBy: mainSortBy && mainSortBy.length > 0 ? mainSortBy : undefined,
+  };
+
+  const clauses = buildDrizzleClausesFromPagination<TSchema, TColumn, SQL, SQL>(mainPagination, {
+    fields: config.fields,
+    operators,
+    selectAlias: aliasBuilder,
+    strictFieldMapping,
+  });
 
   // Inject parent key columns into the select shape.
   Object.assign(clauses.select, parentKeyFields);
@@ -1749,7 +1742,7 @@ export function generateSelectQuery<
 
   // ── assemble / execute helpers ──────────────────────────────────
   type AssembledRow = InferAssembledRow<TFields, TRelations>;
-  type ExecuteResult = SelectResponse<TSchema, AllowedSelectablePath<TSchema>, SelectResponseType>;
+  type ExecuteResult = SelectResponse<TSchema, AllowedPath<TSchema>, SelectResponseType>;
 
   const assemble = (
     mainRows: Record<string, unknown>[],

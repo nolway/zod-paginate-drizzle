@@ -1,8 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import type { AllowedSelectablePath, PaginationPayload, SelectQueryPayload } from 'zod-paginate';
+import type { DataSchema, PaginationPayload, SelectQueryPayload } from 'zod-paginate';
 import {
   applyDrizzlePaginationOnQuery,
   generatePaginationQuery,
@@ -13,24 +12,6 @@ import {
   createMySqlDrizzleOperators,
   createPgDrizzleOperators,
 } from './drizzle-adapter';
-
-/**
- * Concrete Zod schema covering all field paths used across tests.
- * This avoids the abstract `DataSchema` type where `AllowedSelectablePath`
- * collapses to `never`.
- */
-const TestSchema = z.object({
-  id: z.number(),
-  name: z.string(),
-  email: z.string(),
-  age: z.number(),
-  tags: z.array(z.string()),
-  profile_name: z.string(),
-  profile: z.object({ name: z.string() }),
-  posts: z.object({ id: z.number(), title: z.string() }),
-  comments: z.object({ body: z.string() }),
-});
-type TestSchema = typeof TestSchema;
 
 const users = pgTable('users', {
   id: integer('id').notNull(),
@@ -83,7 +64,7 @@ class QuerySpy {
   }
 }
 
-function toParsed(pagination: PaginationPayload<TestSchema>): PaginationPayload<TestSchema> {
+function toParsed(pagination: PaginationPayload<DataSchema>): PaginationPayload<DataSchema> {
   return pagination;
 }
 
@@ -194,9 +175,7 @@ describe('applyDrizzlePaginationOnQuery', () => {
       type: 'LIMIT_OFFSET',
       page: 1,
       limit: 10,
-      // @ts-expect-error -- intentionally invalid field names for unknown mapping test
       sortBy: [{ property: 'unknownSort', direction: 'ASC' }],
-      // @ts-expect-error -- intentionally invalid field names for unknown mapping test
       select: ['unknownSelect'],
       filters: {
         type: 'filter',
@@ -1225,9 +1204,7 @@ describe('generatePaginationQuery', () => {
 });
 
 describe('generateSelectQuery', () => {
-  function toSelectParsed(
-    select: AllowedSelectablePath<TestSchema>[],
-  ): SelectQueryPayload<TestSchema> {
+  function toSelectParsed(select: string[]): SelectQueryPayload<DataSchema> {
     return { fields: select, responseType: 'many' };
   }
 
@@ -1542,7 +1519,7 @@ describe('generateSelectQuery', () => {
   it('applies limit 1 on main query when responseType is "one"', () => {
     const mainQuery = new QuerySpy();
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name'],
       responseType: 'one',
     };
@@ -1558,7 +1535,7 @@ describe('generateSelectQuery', () => {
   it('does not apply limit on main query when responseType is "many"', () => {
     const mainQuery = new QuerySpy();
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name'],
       responseType: 'many',
     };
@@ -1593,7 +1570,7 @@ describe('generateSelectQuery', () => {
       Promise.resolve(mainData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name'],
       responseType: 'one',
     };
@@ -1615,7 +1592,7 @@ describe('generateSelectQuery', () => {
       Promise.resolve([]).then(onfulfilled),
     );
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name'],
       responseType: 'one',
     };
@@ -1639,7 +1616,7 @@ describe('generateSelectQuery', () => {
       Promise.resolve(mainData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name'],
       responseType: 'many',
     };
@@ -1668,7 +1645,7 @@ describe('generateSelectQuery', () => {
       Promise.resolve(relationData).then(onfulfilled),
     );
 
-    const parsed: SelectQueryPayload<TestSchema> = {
+    const parsed: SelectQueryPayload<DataSchema> = {
       fields: ['name', 'posts.title'],
       responseType: 'one',
     };
@@ -2098,8 +2075,8 @@ describe('assembleDrizzleRelations', () => {
 
 describe('buildLimitOffsetResponseMeta', () => {
   function toLimitOffsetParsed(
-    pagination: PaginationPayload<TestSchema, 'LIMIT_OFFSET'>,
-  ): PaginationPayload<TestSchema, 'LIMIT_OFFSET'> {
+    pagination: PaginationPayload<DataSchema, 'LIMIT_OFFSET'>,
+  ): PaginationPayload<DataSchema, 'LIMIT_OFFSET'> {
     return pagination;
   }
 
@@ -2166,8 +2143,8 @@ describe('buildLimitOffsetResponseMeta', () => {
 
 describe('buildCursorResponseMeta', () => {
   function toCursorParsed(
-    pagination: PaginationPayload<TestSchema, 'CURSOR'>,
-  ): PaginationPayload<TestSchema, 'CURSOR'> {
+    pagination: PaginationPayload<DataSchema, 'CURSOR'>,
+  ): PaginationPayload<DataSchema, 'CURSOR'> {
     return pagination;
   }
 
