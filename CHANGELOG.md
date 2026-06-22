@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v5.0.0...v6.0.0) (2026-06-22)
+
+
+### Miscellaneous Chores
+
+* release 6.0.0 ([b109586](https://github.com/nolway/zod-paginate-drizzle/commit/b1095860aef4cddd537364d14cc0d52674f7a57f))
+
 ## [5.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v4.0.0...v5.0.0) (2026-04-16)
 
 
