@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.1.0](https://github.com/nolway/zod-paginate-drizzle/compare/v6.0.0...v6.1.0) (2026-06-23)
+
+
+### Features
+
+* add contains handling on MySQL ([eb5771b](https://github.com/nolway/zod-paginate-drizzle/commit/eb5771b1351ef503fcfd4a42529c84bd39af2774))
+
 ## [6.0.0](https://github.com/nolway/zod-paginate-drizzle/compare/v5.0.0...v6.0.0) (2026-06-22)
 
 
