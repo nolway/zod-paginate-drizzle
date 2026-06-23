@@ -362,6 +362,8 @@ Returns default MySQL operators for Drizzle.
 
 `$ilike` and `$sw` map to `like` (collation decides case sensitivity).
 
+`$contains` maps to a substring match via `like` (the column must contain every provided value), since MySQL has no PostgreSQL-style array containment operator (`@>`).
+
 ## Supported filter operators
 
 | Operator | Description |
@@ -369,7 +371,7 @@ Returns default MySQL operators for Drizzle.
 | `$null` | Is null / is not null |
 | `$eq` | Equals |
 | `$in` | In array |
-| `$contains` | Array contains (PG by default; custom for MySQL if needed) |
+| `$contains` | PG: array contains (`@>`, via `arrayContains`). MySQL: substring match (`like '%value%'`, all values required) |
 | `$gt` | Greater than |
 | `$gte` | Greater than or equal |
 | `$lt` | Less than |
