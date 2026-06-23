@@ -576,9 +576,21 @@ export function createPgDrizzleOperators(): DrizzleSqlOperatorSet {
 }
 
 /**
+ * Builds a MySQL `$contains` expression.
+ *
+ * MySQL has no native array-containment operator (unlike PostgreSQL's `@>`), so
+ * `$contains` is implemented as a substring match via `LIKE`: the column must
+ * contain every provided value (`column LIKE '%value%'` combined with `AND`).
+ */
+function mysqlContains(column: DrizzleSqlColumn, values: readonly string[]): SQL {
+  const clauses = values.map((value) => drizzleLike(column, `%${escapeLike(value)}%`));
+  return andSql(...clauses);
+}
+
+/**
  * Ready-to-use operator set for Drizzle + MySQL.
  * `$ilike` and `$sw` are mapped to `like` (case-insensitive behavior depends on collation).
- * `$contains` is intentionally not provided by default.
+ * `$contains` is mapped to a substring match via `LIKE` (MySQL has no array-containment operator).
  */
 export function createMySqlDrizzleOperators(): DrizzleSqlOperatorSet {
   return {
@@ -595,6 +607,7 @@ export function createMySqlDrizzleOperators(): DrizzleSqlOperatorSet {
     not: drizzleNot,
     asc: drizzleAsc,
     desc: drizzleDesc,
+    contains: mysqlContains,
   };
 }
 

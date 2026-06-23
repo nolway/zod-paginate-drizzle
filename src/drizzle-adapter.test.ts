@@ -76,9 +76,9 @@ describe('createPgDrizzleOperators', () => {
 });
 
 describe('createMySqlDrizzleOperators', () => {
-  it('does not expose contains support by default', () => {
+  it('exposes contains support for mysql', () => {
     const operators = createMySqlDrizzleOperators();
-    expect(operators.contains).toBeUndefined();
+    expect(operators.contains).toBeTypeOf('function');
   });
 });
 
@@ -348,9 +348,13 @@ describe('applyDrizzlePaginationOnQuery', () => {
       },
     });
 
+    const operatorsWithoutContains = createMySqlDrizzleOperators();
+    operatorsWithoutContains.contains = undefined;
+
     expect(() =>
       applyDrizzlePaginationOnQuery(parsed, {
         dialect: 'mysql',
+        operators: operatorsWithoutContains,
         buildQuery: () => query,
         fields: {
           name: users.name,

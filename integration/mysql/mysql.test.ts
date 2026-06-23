@@ -206,6 +206,61 @@ describe('MySQL integration', () => {
     expect(rows[0]).toHaveProperty('name', 'Charlie');
   });
 
+  it('filters with $contains (substring match for MySQL)', async () => {
+    await seedUsers();
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+      select: ['name'],
+      sortBy: [{ property: 'name', direction: 'ASC' }],
+      filters: {
+        type: 'filter',
+        field: 'name',
+        condition: { group: 'name', op: '$contains', value: ['li'] },
+      },
+    });
+
+    const { query } = applyDrizzlePaginationOnQuery(parsed, {
+      dialect: 'mysql',
+      fields,
+      buildQuery: (select) => db.select(select).from(users),
+    });
+
+    const rows = await query;
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.name)).toEqual(['Alice', 'Charlie']);
+  });
+
+  it('filters with $contains requiring all values (AND semantics)', async () => {
+    await seedUsers();
+
+    const parsed = toParsed({
+      type: 'LIMIT_OFFSET',
+      page: 1,
+      limit: 10,
+      select: ['name'],
+      filters: {
+        type: 'filter',
+        field: 'name',
+        condition: { group: 'name', op: '$contains', value: ['ar', 'li'] },
+      },
+    });
+
+    const { query } = applyDrizzlePaginationOnQuery(parsed, {
+      dialect: 'mysql',
+      fields,
+      buildQuery: (select) => db.select(select).from(users),
+    });
+
+    const rows = await query;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveProperty('name', 'Charlie');
+  });
+
   it('filters with $null operator', async () => {
     await seedUsers();
     await db.execute(
